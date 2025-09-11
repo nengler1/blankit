@@ -4,5 +4,5 @@ BlankIt is an open-source local AI-based image redaction program. Input an image
 ## Dependencies
 Create a new Python Virtual Environment and install the necessary libraries using requirements.txt
 ```bash
-python install -r requirements.txt
+pip install -r requirements.txt
 ```
