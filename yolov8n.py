@@ -11,7 +11,7 @@ MODEL_PATH = 'models/yolov8n-face.pt'
 model = YOLO(MODEL_PATH)
 
 # inference
-image_path = "images/group_test.jpg"
+image_path = "images/f_and_l.jpg"
 
 # open image once as a PIL image (also used for drawing)
 img = cv2.imread(image_path)
