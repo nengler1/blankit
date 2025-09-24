@@ -16,6 +16,8 @@ class ImageRedactorApp(tk.Tk):
         self.geometry(f'{width}x{height}+{center_x}+{center_y}')
         self.image = None
         self.canvas_image = None
+        # TODO: Display logo on startup
+        # Display logo on app home page before image upload (Image at Front-End\Icons\Logo.png)
 
         self.create_widgets()
         self.create_menu()
