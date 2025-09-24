@@ -32,7 +32,7 @@ def upload_photo():
 window = tk.Tk()
 window.title("Image Uploader")
 window.lift()
-window.geometry(f'{width//2}x{height//2}+{center_x*(3//2)}+{center_y*(3//2)}')
+window.geometry(f'{width//2}x{height//2}+{center_x*3//2}+{center_y*3//2}')
 # TODO:     Add image upload button of any filetype (png, jpeg, jpg, etc.)
 #           Add image display and confirmation
 #           Focus window until complete
