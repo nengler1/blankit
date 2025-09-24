@@ -1,11 +1,14 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
+import shutil
+import os
 
 class ImageRedactorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("BlankIt")
+        self.iconbitmap('.\Front-End\Icons\Blankit.ico')
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         width, height = screen_width // 2, screen_height // 2
@@ -45,10 +48,12 @@ class ImageRedactorApp(tk.Tk):
             self.canvas.delete("all")
             self.canvas_image = self.canvas.create_image(200, 200, image=self.image)
             # TODO: Add image editing tools (blur, redact, etc.)
+            # See: https://hackr.io/blog/how-to-create-a-python-image-editor-app
 
     def save_image(self):
         if self.image:
             # TODO: Save the current image after edits, remove metadata, etc.
+            # See: https://www.geeksforgeeks.org/python/save-image-to-file-in-python-using-tkinter/
             messagebox.showinfo("Save", "Save feature to be implemented.")
         else:
             messagebox.showwarning("No image", "No image to save!")
