@@ -19,10 +19,13 @@ yolo_face_md = YOLO(FACE_MODEL_PATH)
 license_feature_extractor = YolosImageProcessor.from_pretrained(LICENSE_MODEL_PATH)
 license_model = YolosForObjectDetection.from_pretrained(LICENSE_MODEL_PATH)
 
-face_image = face_predict(yolo_face_md, img)
+face_image, face_coords = face_predict(yolo_face_md, img)
 face_arr = np.array(face_image)
 
-output_image = license_predict(face_arr, img_rgb, license_feature_extractor, license_model)
+output_image, license_coords = license_predict(face_arr, img_rgb, license_feature_extractor, license_model)
+
+print("FACE", face_coords, "\n")
+print("LICENSE", license_coords, "\n")
 
 cv2.imshow("Detections", output_image)
 cv2.waitKey(0)
