@@ -1,6 +1,13 @@
 # New file to handle the main page.
 # This file will handle accespting, processing, and editing the given image.
 
+
+# TODO: Complete the following:
+#       Complete TODOs for each window
+#       Add icons for app
+#       Add menu bar for file, edit, view, help, etc.
+#       Eventually look into mobile interfaces for IOS and Android
+
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
