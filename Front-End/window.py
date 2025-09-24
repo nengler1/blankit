@@ -1,50 +1,58 @@
-# New file to handle the main page.
-# This file will handle accespting, processing, and editing the given image.
-
-
-# TODO: Complete the following:
-#       Complete TODOs for each window
-#       Add icons for app
-#       Add menu bar for file, edit, view, help, etc.
-#       Eventually look into mobile interfaces for IOS and Android
-
 import tkinter as tk
-from tkinter import ttk
-from tkinter import filedialog
+from tkinter import ttk, filedialog, messagebox
+from PIL import Image, ImageTk
 
-root = tk.Tk()
+class ImageRedactorApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("BlankIt")
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        width, height = screen_width // 2, screen_height // 2
+        center_x, center_y = (screen_width // 2 - width // 2, screen_height // 2 - height // 2)
+        self.geometry(f'{width}x{height}+{center_x}+{center_y}')
+        self.image = None
+        self.canvas_image = None
 
-root.title("BlankIt")
+        self.create_widgets()
+        self.create_menu()
 
-screen_width = root.winfo_screenwidth()
-screen_height = root.winfo_screenheight()
+    def create_widgets(self):
+        # Upload Button
+        self.upload_btn = ttk.Button(self, text="Upload Photo", command=self.upload_photo)
+        self.upload_btn.pack(pady=10)
 
-width = screen_width // 2
-height = screen_height // 2
+        # Canvas to display image
+        self.canvas = tk.Canvas(self, bg="grey", width=400, height=400)
+        self.canvas.pack(expand=True, fill='both')
 
-center_x = int(screen_width/2 - width / 2)
-center_y = int(screen_height/2 - height / 2)
+    def create_menu(self):
+        menubar = tk.Menu(self)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Open Image", command=self.upload_photo)
+        file_menu.add_command(label="Save Image", command=self.save_image)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.quit)
+        menubar.add_cascade(label="File", menu=file_menu)
+        self.config(menu=menubar)
 
-root.geometry(f'{width}x{height}+{center_x}+{center_y}')
-def upload_photo():
-    file_path = filedialog.askopenfilename()
-    print(f"Selected File: {file_path}")
-    # TODO: Add logic to process the image file after selected
-    #       Display the image in the window
-    #       Add functionality to edit images (blur, redact, crop, free color, paint bucket, etc.)
-    #       Add functionality to save images
-    #       Add functionality to remove metadata
-    #       Add functionality to undo/redo changes
+    def upload_photo(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp")])
+        if file_path:
+            img = Image.open(file_path)
+            img = img.resize((min(400, img.width), min(400, img.height)), Image.Resampling.LANCZOS)            
+            self.image = ImageTk.PhotoImage(img)
+            self.canvas.delete("all")
+            self.canvas_image = self.canvas.create_image(200, 200, image=self.image)
+            # TODO: Add image editing tools (blur, redact, etc.)
 
-window = tk.Tk()
-window.title("Image Uploader")
-window.lift()
-window.geometry(f'{width//2}x{height//2}+{center_x*3//2}+{center_y*3//2}')
-# TODO:     Add image upload button of any filetype (png, jpeg, jpg, etc.)
-#           Add image display and confirmation
-#           Focus window until complete
-#           Close window and prompt AI when complete
+    def save_image(self):
+        if self.image:
+            # TODO: Save the current image after edits, remove metadata, etc.
+            messagebox.showinfo("Save", "Save feature to be implemented.")
+        else:
+            messagebox.showwarning("No image", "No image to save!")
 
-root.mainloop()
-
-
+if __name__ == "__main__":
+    app = ImageRedactorApp()
+    app.mainloop()
