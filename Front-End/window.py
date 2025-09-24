@@ -22,7 +22,7 @@ root.geometry(f'{width}x{height}+{center_x}+{center_y}')
 def upload_photo():
     file_path = filedialog.askopenfilename()
     print(f"Selected File: {file_path}")
-    # TODO: Add logic to process the image file
+    # TODO: Add logic to process the image file after selected
     #       Display the image in the window
     #       Add functionality to edit images (blur, redact, crop, free color, paint bucket, etc.)
     #       Add functionality to save images
@@ -36,7 +36,7 @@ window.geometry(f'{width//2}x{height//2}+{center_x*3//2}+{center_y*3//2}')
 # TODO:     Add image upload button of any filetype (png, jpeg, jpg, etc.)
 #           Add image display and confirmation
 #           Focus window until complete
-#           Close window when complete
+#           Close window and prompt AI when complete
 
 root.mainloop()
 
