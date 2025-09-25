@@ -18,4 +18,4 @@ pip install -r requirements.txt
 ```
 
 ## Important Note
-`face_recognition` library requires **CMake** to run. Install it from [CMake.org](https://cmake.org/download/)
+`face_recognition` library requires **CMake** to run. [Download CMake](https://cmake.org/download/) here
