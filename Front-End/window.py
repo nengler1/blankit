@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
+from ctypes import windll
 import shutil
 import os
 
@@ -16,6 +17,8 @@ class ImageRedactorApp(tk.Tk):
         self.geometry(f'{width}x{height}+{center_x}+{center_y}')
         self.image = None
         self.canvas_image = None
+        message = tk.Label(self, text="Welcome to BlankIt! Upload an image to get started.", font=("Arial", 14))
+        message.pack()
         # TODO: Display logo on startup
         # Display logo on app home page before image upload (Image at Front-End\Icons\Logo.png)
 
@@ -61,5 +64,10 @@ class ImageRedactorApp(tk.Tk):
             messagebox.showwarning("No image", "No image to save!")
 
 if __name__ == "__main__":
-    app = ImageRedactorApp()
-    app.mainloop()
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+
+    finally:
+        app = ImageRedactorApp()
+        app.mainloop()
