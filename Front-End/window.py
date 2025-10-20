@@ -145,12 +145,10 @@ class ImageRedactorApp(customtkinter.CTk):
         self.editor_frame.pack(side='right', fill='y', padx=(8,0), pady=4)
         # Make the editor panel scrollable: prefer CTkScrollableFrame if available, else canvas+frame fallback
         try:
-            # CTkScrollableFrame exists in newer customtkinter versions
             self.editor_scroll = customtkinter.CTkScrollableFrame(self.editor_frame, width=260)
             self.editor_scroll.pack(fill='both', expand=True, padx=6, pady=6)
             self.editor_inner = self.editor_scroll
         except Exception:
-            # Fallback: create a canvas + inner frame with a vertical scrollbar
             self.editor_canvas = tk.Canvas(self.editor_frame, bd=0, highlightthickness=0)
             self.editor_vscroll = tk.Scrollbar(self.editor_frame, orient='vertical', command=self.editor_canvas.yview)
             self.editor_canvas.configure(yscrollcommand=self.editor_vscroll.set)
@@ -158,7 +156,6 @@ class ImageRedactorApp(customtkinter.CTk):
             self.editor_canvas.pack(side='left', fill='both', expand=True)
             self.editor_inner = customtkinter.CTkFrame(self.editor_canvas, fg_color='transparent')
             self.editor_canvas.create_window((0,0), window=self.editor_inner, anchor='nw')
-            # keep scrollregion updated
             def _on_editor_config(e):
                 try:
                     self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox('all'))
@@ -197,17 +194,17 @@ class ImageRedactorApp(customtkinter.CTk):
 
             # Open button
             open_btn = customtkinter.CTkButton(self.toolbar, text="Open", command=self.upload_photo,
-                                              fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
+                                                fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
             open_btn.pack(side="left", padx=(8, 4), pady=6)
 
             # Save button
             save_btn = customtkinter.CTkButton(self.toolbar, text="Save", command=self.save_image,
-                                              fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
+                                                fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
             save_btn.pack(side="left", padx=4, pady=6)
 
             # Exit button
             exit_btn = customtkinter.CTkButton(self.toolbar, text="Exit", command=self.quit,
-                                              fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
+                                                fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
             exit_btn.pack(side="left", padx=4, pady=6)
 
             # Spacer
@@ -222,11 +219,6 @@ class ImageRedactorApp(customtkinter.CTk):
             except Exception:
                 pass
             self.dark_switch.pack(side="right", padx=10, pady=6)
-
-            self.shape_var = tk.StringVar(value='rectangle')
-            for shape in ['rectangle', 'circle', 'oval']:
-                rb = customtkinter.CTkRadioButton(self.toolbar, text=shape.capitalize(), variable=self.shape_var, value=shape)
-                rb.pack(side='left', padx=2)
 
         except Exception as e:
             # If custom toolbar can't be created, fall back to native menu to avoid losing functionality
@@ -334,6 +326,20 @@ class ImageRedactorApp(customtkinter.CTk):
             rb.pack(anchor='w', padx=12, pady=2)
             self.method_rbs.append(rb)
 
+        customtkinter.CTkLabel(self.editor_frame, text='Shape:').pack(anchor='w', padx=8, pady=(8,0))
+        self.shape_var = tk.StringVar(value='rectangle')
+        shapes = ['rectangle', 'circle', 'oval']
+        mode = None
+        try:
+            mode = customtkinter.get_appearance_mode()
+        except Exception:
+            mode = 'Light'
+        rb_text_color = '#BDB6B5' if mode == 'Dark' else None
+        for s in shapes:
+            rb = customtkinter.CTkRadioButton(self.editor_frame, text=s.capitalize(), variable=self.shape_var, value=s, text_color=rb_text_color)
+            rb.pack(anchor='w', padx=12, pady=2)
+
+
         customtkinter.CTkLabel(self.editor_frame, text='Intensity:').pack(anchor='w', padx=8, pady=(8,0))
         self.intensity_var = tk.IntVar(value=10)
         customtkinter.CTkSlider(self.editor_frame, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
@@ -357,6 +363,8 @@ class ImageRedactorApp(customtkinter.CTk):
         customtkinter.CTkButton(cp_frame, text='Paste to All', command=self._paste_to_all).pack(side='left', padx=4)
         customtkinter.CTkButton(self.editor_frame, text='Remove Metadata', command=self._remove_metadata).pack(pady=6)
 
+        customtkinter.CTkButton(self.editor_frame, text='Delete Selected', command=self._delete_selected_layer).pack(pady=6)
+ 
         # draw existing regions if any
         self._refresh_region_list()
 
@@ -446,6 +454,14 @@ class ImageRedactorApp(customtkinter.CTk):
             self.selected_layer = None
             return
         self.selected_layer = sel[0]
+        layer = self.layer_manager.layers[self.selected_layer]
+        try:
+            self.method_var.set(layer.method)
+            self.intensity_var.set(layer.intensity)
+            self.size_var.set(layer.size)
+            self.shape_var.set(layer.shape)
+        except Exception:
+            pass
         self._draw_regions()
 
 
@@ -492,13 +508,33 @@ class ImageRedactorApp(customtkinter.CTk):
 
 
     def _draw_regions(self):
-        # clear any overlays (we use tags)
+        # Start with displayed image base
+        base = self.display_image.copy()
+        # Composite all but selected onto base
+        for i, layer in enumerate(self.layer_manager.layers):
+            if i == self.selected_layer:
+                continue
+            base = layer.apply(base)
+        # Update canvas image with composite
+        self.tk_image = ImageTk.PhotoImage(base)
+        self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
+        # Draw outline of selected with yellow highlight
         self.canvas.delete('region_overlay')
-        scale = getattr(self, 'display_scale', 1.0)
-        for i, r in enumerate(self.regions):
-            x1,y1,x2,y2 = [int(v*scale) for v in r['coords']]
-            color = 'yellow' if i==self.selected_region_index else 'red'
-            self.canvas.create_rectangle(x1,y1,x2,y2, outline=color, width=2, tags='region_overlay')
+        if self.selected_layer is not None and 0 <= self.selected_layer < len(self.layer_manager.layers):
+            layer = self.layer_manager.layers[self.selected_layer]
+            scale = getattr(self, 'display_scale', 1.0)
+            x1, y1, x2, y2 = [int(v * scale) for v in layer.coords]
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline='yellow', width=3, tags='region_overlay')
+
+
+    def _delete_selected_layer(self):
+        if self.selected_layer is None:
+            return
+        self.layer_manager.remove_layer(self.selected_layer)
+        self.selected_layer = None
+        self._refresh_region_list()
+        self._draw_regions()
+
 
     def _apply_redaction_to_image(self, region):
         # Work on the original image then later update display
@@ -549,43 +585,42 @@ class ImageRedactorApp(customtkinter.CTk):
         self._draw_regions()
 
     def _on_mousewheel(self, event):
-        """Support vertical scrolling and Ctrl+Wheel zoom on Windows.
-        If Ctrl is held, zoom the image in/out. Otherwise, scroll vertically.
-        """
-        # Only respond when canvas has focus to avoid interfering with other widgets
         try:
             focused = self.focus_get()
-            if focused is None:
+            if focused != self.canvas:
                 return
         except Exception:
             pass
 
-        # On Windows, event.delta is multiples of 120 per notch
         delta = 0
         try:
             delta = int(event.delta)
         except Exception:
-            # some systems provide event.delta as 1/-1
             try:
                 delta = 120 if event.delta > 0 else -120
             except Exception:
                 delta = 0
 
-        # If Ctrl is held, zoom
         ctrl = (event.state & 0x0004) != 0
+
         if ctrl:
-            # positive delta => zoom in
             if delta > 0:
                 self._zoom_canvas(1.1)
             else:
                 self._zoom_canvas(0.9)
         else:
-            # Scroll vertically by units
+            # Vertical scrolling
             try:
-                if delta > 0:
-                    self.canvas.yview_scroll(-1, 'units')
+                if event.state & 0x0001:  # Shift pressed for horizontal scroll
+                    if delta > 0:
+                        self.canvas.xview_scroll(-1, 'units')
+                    else:
+                        self.canvas.xview_scroll(1, 'units')
                 else:
-                    self.canvas.yview_scroll(1, 'units')
+                    if delta > 0:
+                        self.canvas.yview_scroll(-1, 'units')
+                    else:
+                        self.canvas.yview_scroll(1, 'units')
             except Exception:
                 pass
 
