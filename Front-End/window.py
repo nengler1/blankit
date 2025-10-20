@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, BooleanVar
 from PIL import Image, ImageTk
 from ctypes import windll
+from layer_manager import Layer, LayerManager
 import customtkinter
 import shutil
 import os
@@ -79,6 +80,12 @@ class ImageRedactorApp(customtkinter.CTk):
         self.canvas_image = None
         # Create toolbar first so it is always at the top
         self.create_toolbar()
+
+        # Init LayerManager
+        self.layer_manager = LayerManager()
+        self.selected_layer = None  # track currently selected layer index
+        self.region_clipboard = None  # for copy/paste of settings
+
 
         # Initial message (use customtkinter label so the theme applies)
         # Colors: light mode welcome(#BDB6B5), dark mode welcome(#43434A)
@@ -216,6 +223,11 @@ class ImageRedactorApp(customtkinter.CTk):
                 pass
             self.dark_switch.pack(side="right", padx=10, pady=6)
 
+            self.shape_var = tk.StringVar(value='rectangle')
+            for shape in ['rectangle', 'circle', 'oval']:
+                rb = customtkinter.CTkRadioButton(self.toolbar, text=shape.capitalize(), variable=self.shape_var, value=shape)
+                rb.pack(side='left', padx=2)
+
         except Exception as e:
             # If custom toolbar can't be created, fall back to native menu to avoid losing functionality
             print(f"Warning: failed to create CTk toolbar: {e}")
@@ -286,12 +298,16 @@ class ImageRedactorApp(customtkinter.CTk):
             # See: https://hackr.io/blog/how-to-create-a-python-image-editor-app
 
     def save_image(self):
-        if self.image:
-            # TODO: Save the current image after edits, remove metadata, etc.
-            # See: https://www.geeksforgeeks.org/python/save-image-to-file-in-python-using-tkinter/
-            messagebox.showinfo("Save", "Save feature to be implemented.")
-        else:
-            messagebox.showwarning("No image", "No image to save!")
+        if not hasattr(self, 'image') or self.image is None:
+            messagebox.showwarning("No Image", "Please upload an image first.")
+            return
+        export_path = filedialog.asksaveasfilename(defaultextension=".png",
+                                                filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")])
+        if export_path:
+            composite_img = self.layer_manager.merge_all(self.image)
+            composite_img.save(export_path)
+            messagebox.showinfo("Saved", "Image saved successfully.")
+
 
     # ------- Editor and region handling -------
     def show_editor_panel(self):
@@ -402,61 +418,60 @@ class ImageRedactorApp(customtkinter.CTk):
             x1, y1 = event.x, event.y
             self.canvas.delete(self._temp_rect)
             self._temp_rect = None
-            # normalize coords and clamp
-            x0, x1 = sorted((max(x0,0), max(x1,0)))
-            y0, y1 = sorted((max(y0,0), max(y1,0)))
-            if abs(x1-x0) < 5 or abs(y1-y0) < 5:
+            x0, x1 = sorted((max(x0, 0), max(x1, 0)))
+            y0, y1 = sorted((max(y0, 0), max(y1, 0)))
+            if abs(x1 - x0) < 5 or abs(y1 - y0) < 5:
                 return
-            # convert to original image coordinates
             scale = getattr(self, 'display_scale', 1.0)
-            box = (int(x0/scale), int(y0/scale), int(x1/scale), int(y1/scale))
-            self.regions.append({'coords': box, 'method': self.method_var.get(), 'intensity': self.intensity_var.get(), 'size': self.size_var.get()})
+            box = (int(x0 / scale), int(y0 / scale), int(x1 / scale), int(y1 / scale))
+            shape = getattr(self, 'shape_var', tk.StringVar(value='rectangle')).get()
+            region = Layer(shape=shape, coords=box,
+                        method=self.method_var.get(),
+                        intensity=self.intensity_var.get(),
+                        size=self.size_var.get())
+            self.layer_manager.add_layer(region)
             self._refresh_region_list()
             self._draw_regions()
 
+
     def _refresh_region_list(self):
         self.region_listbox.delete(0, 'end')
-        for i, r in enumerate(self.regions):
-            self.region_listbox.insert('end', f"#{i} {r['method']} {r['coords']}")
+        for i, l in enumerate(self.layer_manager.layers):
+            self.region_listbox.insert('end', f"{i + 1}. {l.method} {l.shape} {l.coords}")
+
 
     def _on_region_select(self, event):
         sel = self.region_listbox.curselection()
         if not sel:
-            self.selected_region_index = None
+            self.selected_layer = None
             return
-        idx = sel[0]
-        self.selected_region_index = idx
-        r = self.regions[idx]
-        # update controls to reflect selection
-        try:
-            self.method_var.set(r.get('method','blur'))
-            self.intensity_var.set(r.get('intensity',10))
-            self.size_var.set(r.get('size',0))
-        except Exception:
-            pass
+        self.selected_layer = sel[0]
         self._draw_regions()
 
-    def _delete_selected_region(self):
-        if self.selected_region_index is None:
-            return
-        del self.regions[self.selected_region_index]
-        self.selected_region_index = None
-        self._refresh_region_list()
-        self._draw_regions()
+
+        def _delete_selected_region(self):
+            if self.selected_region_index is None:
+                return
+            del self.regions[self.selected_region_index]
+            self.selected_region_index = None
+            self._refresh_region_list()
+            self._draw_regions()
 
     def _copy_region_settings(self):
-        if self.selected_region_index is None:
+        if self.selected_layer is None:
             return
-        self.region_clipboard = dict(self.regions[self.selected_region_index])
+        self.region_clipboard = dict(vars(self.layer_manager.layers[self.selected_layer]))
 
     def _paste_region_settings(self):
-        if self.region_clipboard is None or self.selected_region_index is None:
+        if self.selected_layer is None or not hasattr(self, 'region_clipboard') or self.region_clipboard is None:
             return
-        r = self.regions[self.selected_region_index]
-        for k in ('method','intensity','size'):
+        layer = self.layer_manager.layers[self.selected_layer]
+        for k in ('method', 'intensity', 'size'):
             if k in self.region_clipboard:
-                r[k] = self.region_clipboard[k]
+                setattr(layer, k, self.region_clipboard[k])
         self._refresh_region_list()
+        self._draw_regions()
+
 
     def _paste_to_all(self):
         if self.region_clipboard is None:
@@ -468,18 +483,13 @@ class ImageRedactorApp(customtkinter.CTk):
         self._refresh_region_list()
 
     def _apply_to_selected(self):
-        if self.selected_region_index is None:
-            messagebox.showwarning('No region', 'Select a region first')
+        if self.selected_layer is None or not hasattr(self, 'image') or self.image is None:
+            messagebox.showwarning("No selection", "Select a region first!")
             return
-        r = self.regions[self.selected_region_index]
-        # update region settings from controls
-        r['method'] = self.method_var.get()
-        r['intensity'] = self.intensity_var.get()
-        r['size'] = self.size_var.get()
-        # apply edit to original image
-        self._apply_redaction_to_image(r)
-        # refresh display
+        layer = self.layer_manager.layers[self.selected_layer]
+        self.image = layer.apply(self.image)
         self._update_display_image()
+
 
     def _draw_regions(self):
         # clear any overlays (we use tags)
