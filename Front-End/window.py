@@ -143,33 +143,35 @@ class ImageRedactorApp(customtkinter.CTk):
         # Editor panel (created as empty for now; populated after upload)
         self.editor_frame = customtkinter.CTkFrame(self.content_frame, width=280)
         self.editor_frame.pack(side='right', fill='y', padx=(8,0), pady=4)
-        # Make the editor panel scrollable: prefer CTkScrollableFrame if available, else canvas+frame fallback
-        try:
-            self.editor_scroll = customtkinter.CTkScrollableFrame(self.editor_frame, width=260)
-            self.editor_scroll.pack(fill='both', expand=True, padx=6, pady=6)
-            self.editor_inner = self.editor_scroll
-        except Exception:
-            self.editor_canvas = tk.Canvas(self.editor_frame, bd=0, highlightthickness=0)
-            self.editor_vscroll = tk.Scrollbar(self.editor_frame, orient='vertical', command=self.editor_canvas.yview)
-            self.editor_canvas.configure(yscrollcommand=self.editor_vscroll.set)
-            self.editor_vscroll.pack(side='right', fill='y')
-            self.editor_canvas.pack(side='left', fill='both', expand=True)
-            self.editor_inner = customtkinter.CTkFrame(self.editor_canvas, fg_color='transparent')
-            self.editor_canvas.create_window((0,0), window=self.editor_inner, anchor='nw')
-            def _on_editor_config(e):
-                try:
-                    self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox('all'))
-                except Exception:
-                    pass
-            self.editor_inner.bind('<Configure>', _on_editor_config)
-        # bind mousewheel for editor scrolling (works for both CTkScrollableFrame and fallback)
-        try:
-            # If using CTkScrollableFrame, bind its inner frame
-            if hasattr(self, 'editor_inner'):
-                self.editor_inner.bind('<Enter>', lambda e: self.editor_inner.focus_set())
-                self.editor_inner.bind('<MouseWheel>', self._on_editor_mousewheel)
-        except Exception:
-            pass
+        # Make the editor panel scrollable using a canvas + inner frame (works consistently across CTk versions)
+        self.editor_canvas = tk.Canvas(self.editor_frame, bd=0, highlightthickness=0)
+        self.editor_vscroll = tk.Scrollbar(self.editor_frame, orient='vertical', command=self.editor_canvas.yview)
+        self.editor_canvas.configure(yscrollcommand=self.editor_vscroll.set)
+        # Layout: scrollbar on right, canvas fills remaining area
+        self.editor_vscroll.pack(side='right', fill='y')
+        self.editor_canvas.pack(side='left', fill='both', expand=True)
+        # Inner CTkFrame hosted inside the canvas
+        self.editor_inner = customtkinter.CTkFrame(self.editor_canvas, fg_color='transparent')
+        self.editor_inner.configure(
+            corner_radius=6,
+            border_width=0,
+            fg_color=self.theme_colors['light_bg'],  
+            border_color=self.theme_colors['light_bg'],  
+        )
+        self.editor_canvas.create_window((0,0), window=self.editor_inner, anchor='nw')
+
+        # Keep scrollregion updated and adjust scrollbar visibility
+        def _on_editor_config(e):
+            try:
+                self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox('all'))
+                self._update_editor_scrollbar_visibility()
+            except Exception:
+                pass
+        self.editor_inner.bind('<Configure>', _on_editor_config)
+
+        # Bind mousewheel to the canvas so scrolling works when hovering the settings
+        self.editor_canvas.bind('<Enter>', lambda e: self.editor_canvas.focus_set())
+        self.editor_canvas.bind('<MouseWheel>', self._on_editor_mousewheel)
 
         # Initially hidden: show a label prompting to upload
         self.editor_placeholder = customtkinter.CTkLabel(self.editor_inner, text='Upload an image to see editing options')
@@ -243,10 +245,8 @@ class ImageRedactorApp(customtkinter.CTk):
     def upload_photo(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp")])
         if file_path:
-            # Load full PIL image and keep original for edits
             pil = Image.open(file_path).convert('RGBA')
             self.original_image = pil.copy()
-            # fit image into canvas viewport while preserving aspect
             max_dim = 800
             w, h = pil.size
             scale = min(max_dim / w, max_dim / h, 1.0)
@@ -255,39 +255,58 @@ class ImageRedactorApp(customtkinter.CTk):
             self.display_image = pil.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
             self.tk_image = ImageTk.PhotoImage(self.display_image)
             self.canvas.delete("all")
-            # configure canvas virtual size and display image at origin
-            self.canvas.config(width=min(disp_w, self.winfo_width()//2), height=min(disp_h, self.winfo_height()//2))
+            self.canvas.config(width=min(disp_w, self.winfo_width() // 2), height=min(disp_h, self.winfo_height() // 2))
             self.canvas_image = self.canvas.create_image(0, 0, anchor='nw', image=self.tk_image)
-            # Update scrollregion so scrollbars work and show scrollbars if content overflows
+
+            # Update scrollregion for canvas and manage scrollbar visibility
             try:
                 self.canvas.configure(scrollregion=(0, 0, disp_w, disp_h))
-                # show scrollbars if image is larger than canvas viewport
                 if disp_h > self.canvas.winfo_height():
                     self.v_scroll.grid()
                 else:
-                    try:
-                        self.v_scroll.grid_remove()
-                    except Exception:
-                        pass
+                    self.v_scroll.grid_remove()
                 if disp_w > self.canvas.winfo_width():
                     self.h_scroll.grid()
                 else:
-                    try:
-                        self.h_scroll.grid_remove()
-                    except Exception:
-                        pass
+                    self.h_scroll.grid_remove()
             except Exception:
                 pass
-            # clear regions and show editor
+
+            # Re-enable scrollbar and mouse bindings for editor panel after image upload
+            try:
+                if hasattr(self, 'editor_scroll'):
+                    self.editor_scroll.update_idletasks()
+                elif hasattr(self, 'editor_canvas'):
+                    self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox("all"))
+            except Exception:
+                pass
+
+            # Show editor panel and reset regions
             self.regions = []
             self.selected_region_index = None
             self.show_editor_panel()
-            # Bind drag to allow user to add manual regions
+
+            # Bind canvas drag events for region selection
             self.canvas.bind('<ButtonPress-1>', self._on_canvas_press)
             self.canvas.bind('<B1-Motion>', self._on_canvas_drag)
             self.canvas.bind('<ButtonRelease-1>', self._on_canvas_release)
+
+            self.show_editor_panel()
+            self._refresh_editor_scrollregion()
+
             # TODO: Add image editing tools (blur, redact, etc.)
             # See: https://hackr.io/blog/how-to-create-a-python-image-editor-app
+
+    def _refresh_editor_scrollregion(self):
+        try:
+            if hasattr(self, 'editor_scroll'):
+                # For CTkScrollableFrame
+                self.editor_scroll.update_idletasks()
+            elif hasattr(self, 'editor_canvas'):
+                # Canvas + inner frame fallback
+                self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox("all"))
+        except Exception as e:
+            print(f"Warning updating editor scrollregion: {e}")
 
     def save_image(self):
         if not hasattr(self, 'image') or self.image is None:
@@ -304,13 +323,19 @@ class ImageRedactorApp(customtkinter.CTk):
     # ------- Editor and region handling -------
     def show_editor_panel(self):
         # Remove placeholder
-        for child in self.editor_frame.winfo_children():
-            child.destroy()
+        # Clear existing controls inside the editor inner frame (leave canvas and scrollbar intact)
+        try:
+            for child in self.editor_inner.winfo_children():
+                child.destroy()
+        except Exception:
+            # fallback: clear editor_frame if editor_inner missing
+            for child in self.editor_frame.winfo_children():
+                child.destroy()
 
         # Controls: method, intensity, size, add/remove, listbox of regions, copy/paste
-        customtkinter.CTkLabel(self.editor_frame, text='Edit Regions').pack(pady=(8,4))
+        customtkinter.CTkLabel(self.editor_inner, text='Edit Regions').pack(pady=(8,4))
 
-        customtkinter.CTkLabel(self.editor_frame, text='Redaction method:').pack(anchor='w', padx=8)
+        customtkinter.CTkLabel(self.editor_inner, text='Redaction method:').pack(anchor='w', padx=8)
         self.method_var = tk.StringVar(value='blur')
         methods = ['blur', 'redact', 'pixelate', 'none']
         # create radio buttons and store them so we can update text color on appearance changes
@@ -322,11 +347,13 @@ class ImageRedactorApp(customtkinter.CTk):
             mode = 'Light'
         rb_text_color = '#BDB6B5' if mode == 'Dark' else None
         for m in methods:
-            rb = customtkinter.CTkRadioButton(self.editor_frame, text=m.title(), variable=self.method_var, value=m, text_color=rb_text_color)
+            rb = customtkinter.CTkRadioButton(self.editor_inner, text=m.title(), variable=self.method_var, value=m, text_color=rb_text_color)
             rb.pack(anchor='w', padx=12, pady=2)
             self.method_rbs.append(rb)
+        self._refresh_editor_scrollregion()
 
-        customtkinter.CTkLabel(self.editor_frame, text='Shape:').pack(anchor='w', padx=8, pady=(8,0))
+
+        customtkinter.CTkLabel(self.editor_inner, text='Shape:').pack(anchor='w', padx=8, pady=(8,0))
         self.shape_var = tk.StringVar(value='rectangle')
         shapes = ['rectangle', 'circle', 'oval']
         mode = None
@@ -336,37 +363,44 @@ class ImageRedactorApp(customtkinter.CTk):
             mode = 'Light'
         rb_text_color = '#BDB6B5' if mode == 'Dark' else None
         for s in shapes:
-            rb = customtkinter.CTkRadioButton(self.editor_frame, text=s.capitalize(), variable=self.shape_var, value=s, text_color=rb_text_color)
+            rb = customtkinter.CTkRadioButton(self.editor_inner, text=s.capitalize(), variable=self.shape_var, value=s, text_color=rb_text_color)
             rb.pack(anchor='w', padx=12, pady=2)
 
 
-        customtkinter.CTkLabel(self.editor_frame, text='Intensity:').pack(anchor='w', padx=8, pady=(8,0))
+        customtkinter.CTkLabel(self.editor_inner, text='Intensity:').pack(anchor='w', padx=8, pady=(8,0))
         self.intensity_var = tk.IntVar(value=10)
-        customtkinter.CTkSlider(self.editor_frame, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
+        customtkinter.CTkSlider(self.editor_inner, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
 
-        customtkinter.CTkLabel(self.editor_frame, text='Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
+        customtkinter.CTkLabel(self.editor_inner, text='Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
         self.size_var = tk.IntVar(value=0)
-        customtkinter.CTkSlider(self.editor_frame, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
+        customtkinter.CTkSlider(self.editor_inner, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
 
         # Region list
-        customtkinter.CTkLabel(self.editor_frame, text='Regions:').pack(anchor='w', padx=8, pady=(8,0))
-        self.region_listbox = tk.Listbox(self.editor_frame, height=6)
+        customtkinter.CTkLabel(self.editor_inner, text='Regions:').pack(anchor='w', padx=8, pady=(8,0))
+        self.region_listbox = tk.Listbox(self.editor_inner, height=6)
         self.region_listbox.pack(fill='both', padx=8, pady=4)
         self.region_listbox.bind('<<ListboxSelect>>', self._on_region_select)
 
         # removed 'Add from AI' and 'Delete' buttons per user request
 
-        cp_frame = customtkinter.CTkFrame(self.editor_frame, fg_color='transparent')
+        cp_frame = customtkinter.CTkFrame(self.editor_inner, fg_color='transparent')
         cp_frame.pack(fill='x', padx=8, pady=6)
         customtkinter.CTkButton(cp_frame, text='Copy Settings', command=self._copy_region_settings).pack(side='left', padx=4)
         customtkinter.CTkButton(cp_frame, text='Paste to Selected', command=self._paste_region_settings).pack(side='left', padx=4)
         customtkinter.CTkButton(cp_frame, text='Paste to All', command=self._paste_to_all).pack(side='left', padx=4)
-        customtkinter.CTkButton(self.editor_frame, text='Remove Metadata', command=self._remove_metadata).pack(pady=6)
+        customtkinter.CTkButton(self.editor_inner, text='Remove Metadata', command=self._remove_metadata).pack(pady=6)
 
-        customtkinter.CTkButton(self.editor_frame, text='Delete Selected', command=self._delete_selected_layer).pack(pady=6)
+        customtkinter.CTkButton(self.editor_inner, text='Delete Selected', command=self._delete_selected_layer).pack(pady=6)
  
         # draw existing regions if any
         self._refresh_region_list()
+        # After populating editor controls, ensure scrollbar visibility is correct
+        try:
+            # update canvas scrollregion from inner content
+            self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox('all'))
+            self._update_editor_scrollbar_visibility()
+        except Exception:
+            pass
 
     def _on_editor_mousewheel(self, event):
         """Scroll the editor_inner when the mousewheel is used over the settings area."""
@@ -396,6 +430,33 @@ class ImageRedactorApp(customtkinter.CTk):
                         self.editor_inner.yview_scroll(1, 'units')
                     except Exception:
                         pass
+        except Exception:
+            pass
+
+    def _update_editor_scrollbar_visibility(self):
+        """Show or hide the editor vertical scrollbar depending on whether content overflows."""
+        try:
+            bbox = self.editor_canvas.bbox('all')
+            if not bbox:
+                # nothing in editor
+                try:
+                    self.editor_vscroll.pack_forget()
+                except Exception:
+                    pass
+                return
+            content_height = bbox[3] - bbox[1]
+            view_height = self.editor_canvas.winfo_height()
+            if content_height > view_height and view_height > 10:
+                # ensure scrollbar visible
+                try:
+                    self.editor_vscroll.pack(side='right', fill='y')
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.editor_vscroll.pack_forget()
+                except Exception:
+                    pass
         except Exception:
             pass
 
