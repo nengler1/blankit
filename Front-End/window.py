@@ -7,23 +7,21 @@ from editor_tools import EditorTools
 
 class ImageRedactorApp(customtkinter.CTk):
     def __init__(self):
-        customtkinter.set_appearance_mode("System")
         super().__init__()
+        self.theme_colors = {
+            "dark_bg": "#1B1B1E",
+            "light_bg": "#EAE1DF",
+        }
         self.title("BlankIt")
         self.geometry("900x600")
-        
-        # Initial state
         self.layer_manager = LayerManager()
-        self.editor_tools = EditorTools(self.layer_manager)
+        self.editor_tools = EditorTools(self.layer_manager, self)
         self.selected_layer = None
-        
         self.image = None
         self.original_image = None
         self.display_image = None
         self.display_scale = 1.0
         self.canvas_image_id = None
-        
-        # Layout UI
         self.create_toolbar()
         self.create_main_widgets()
         self.apply_initial_appearance()
@@ -34,16 +32,14 @@ class ImageRedactorApp(customtkinter.CTk):
         btn_fg = "#545E56"
         btn_hover = "#667761"
         btn_text = "#1B1B1E"
-        
         btn_open = customtkinter.CTkButton(toolbar, text="Open", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.upload_photo)
         btn_open.pack(side="left", padx=5, pady=5)
         btn_save = customtkinter.CTkButton(toolbar, text="Save", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.save_image)
         btn_save.pack(side="left", padx=5, pady=5)
         btn_exit = customtkinter.CTkButton(toolbar, text="Exit", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.quit)
         btn_exit.pack(side="left", padx=5, pady=5)
-        
-        self.dark_switch = customtkinter.CTkSwitch(toolbar, text="Dark Mode", command=self.toggle_dark_mode)
-        self.dark_switch.pack(side="right", padx=10, pady=5)
+        self.dark_mode_switch = customtkinter.CTkSwitch(toolbar, text="Dark Mode", command=self.toggle_dark_mode)
+        self.dark_mode_switch.pack(side="right", padx=5, pady=5)
 
     def create_main_widgets(self):
         self.content_frame = customtkinter.CTkFrame(self)
@@ -126,17 +122,94 @@ class ImageRedactorApp(customtkinter.CTk):
         self.show_editor_panel()
         
     def show_editor_panel(self):
-        # Clear current editor_inner children, build UI controls synced with editor_tools & layer_manager
+        # Clear previous widgets
         for child in self.editor_inner.winfo_children():
             child.destroy()
-        
-        # Here you would build method/shape/intensity sliders and region list
-        # (Refer to the old code or your latest implementation for full controls)
-        # Implement syncing UI controls with editor_tools and current selection
-        
-        # Add placeholder for demo:
-        label = customtkinter.CTkLabel(self.editor_inner, text="Editor controls here...")
-        label.pack()
+
+        mode = customtkinter.get_appearance_mode()  # Assume no errors here
+
+        if mode == 'Dark':
+            bg_color = self.theme_colors.get('dark_bg', '#1B1B1E')
+            text_color = "#EAE1DF"
+        else:
+            bg_color = self.theme_colors.get('light_bg', '#EAE1DF')
+            text_color = "#1B1B1E"
+
+        self.editor_inner.configure(fg_color=bg_color)  # Background for editor panel
+
+        # Helper to create labels with explicit color
+        def make_label(text):
+            return customtkinter.CTkLabel(self.editor_inner, text=text, text_color=text_color)
+
+        # Helper to create radio buttons with explicit color
+        def make_radiobutton(text, var, val):
+            return customtkinter.CTkRadioButton(self.editor_inner, text=text, variable=var, value=val, text_color=text_color)
+
+        # Build UI controls with explicit colors
+        make_label('Edit Regions').pack(pady=(8,4))
+
+        make_label('Redaction method:').pack(anchor='w', padx=8)
+        self.method_var = tk.StringVar(value='blur')
+        methods = ['blur', 'redact', 'pixelate', 'none']
+        for m in methods:
+            rb = make_radiobutton(m.title(), self.method_var, m)
+            rb.pack(anchor='w', padx=12, pady=2)
+
+        make_label('Shape:').pack(anchor='w', padx=8, pady=(8,0))
+        self.shape_var = tk.StringVar(value='rectangle')
+        shapes = ['rectangle', 'circle', 'oval']
+        for s in shapes:
+            rb = make_radiobutton(s.capitalize(), self.shape_var, s)
+            rb.pack(anchor='w', padx=12, pady=2)
+
+        make_label('Intensity:').pack(anchor='w', padx=8, pady=(8,0))
+        self.intensity_var = tk.IntVar(value=10)
+        customtkinter.CTkSlider(self.editor_inner, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
+
+        make_label('Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
+        self.size_var = tk.IntVar(value=0)
+        customtkinter.CTkSlider(self.editor_inner, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
+
+        make_label('Regions:').pack(anchor='w', padx=8, pady=(8,0))
+        self.region_listbox = tk.Listbox(self.editor_inner, height=6, fg=text_color, bg=bg_color, selectbackground='#667761')
+        self.region_listbox.pack(fill='both', padx=8, pady=4)
+        self.region_listbox.bind('<<ListboxSelect>>', self._on_region_select)
+
+        self._refresh_region_list()
+
+    def _on_region_select(self, event):
+        """Handle selection changes in the regions Listbox."""
+        if not hasattr(self, "region_listbox"):
+            return
+
+        selection = self.region_listbox.curselection()
+        if not selection:
+            # Nothing selected
+            self.selected_layer = None
+            self.editor_tools.clear_selection()
+            return
+
+        idx = selection[0]
+        self.selected_layer = idx
+
+        # Inform editor tools about the selected region, if it has such a method
+        if hasattr(self.editor_tools, "select_region"):
+            self.editor_tools.select_region(idx)
+
+    def _refresh_region_list(self):
+        """Rebuild the regions Listbox from LayerManager.layers."""
+        if not hasattr(self, "region_listbox"):
+            return
+
+        # Clear current entries
+        self.region_listbox.delete(0, tk.END)
+
+        # Repopulate from layers
+        for idx, layer in enumerate(self.layer_manager.layers):
+            desc = f"{idx+1}: {layer.shape} - {layer.method}"
+            self.region_listbox.insert(tk.END, desc)
+
+
         
     def save_image(self):
         if not self.original_image:
@@ -149,6 +222,46 @@ class ImageRedactorApp(customtkinter.CTk):
         composite = self.layer_manager.merge_all(self.original_image)
         composite.save(save_path)
         messagebox.showinfo("Saved", "Redacted image saved successfully.")
+
+    def _on_mousewheel(self, event):
+        try:
+            focused = self.focus_get()
+            if focused != self.canvas:
+                return
+        except Exception:
+            pass
+
+        delta = 0
+        try:
+            delta = int(event.delta)
+        except Exception:
+            try:
+                delta = 120 if event.delta > 0 else -120
+            except Exception:
+                delta = 0
+
+        ctrl = (event.state & 0x0004) != 0  # Check if Ctrl key pressed
+
+        if ctrl:
+            if delta > 0:
+                self._zoom_canvas(1.1)
+            else:
+                self._zoom_canvas(0.9)
+        else:
+            # Vertical or horizontal scrolling
+            try:
+                if event.state & 0x0001:  # Shift pressed for horizontal scroll
+                    if delta > 0:
+                        self.canvas.xview_scroll(-1, 'units')
+                    else:
+                        self.canvas.xview_scroll(1, 'units')
+                else:
+                    if delta > 0:
+                        self.canvas.yview_scroll(-1, 'units')
+                    else:
+                        self.canvas.yview_scroll(1, 'units')
+            except Exception:
+                pass
 
     def _on_editor_mousewheel(self, event):
         try:

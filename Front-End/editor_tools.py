@@ -1,12 +1,14 @@
 import tkinter as tk
+from layer_manager import Layer
 
 HANDLE_SIZE = 8
 HANDLE_TAG = "resize_handle"
 REGION_TAG = "region_overlay"
 
 class EditorTools:
-    def __init__(self, layer_manager):
+    def __init__(self, layer_manager, app):
         self.layer_manager = layer_manager
+        self.app = app
         self.selected_region = None
         self._dragging = False
         self._resizing = False
@@ -98,13 +100,17 @@ class EditorTools:
             y0, y1 = sorted([y0, y1])
             if abs(x1 - x0) < 5 or abs(y1 - y0) < 5:
                 return
-            scale = 1 # You will need to provide display_scale or original_image size here
-            box = (x0/scale, y0/scale, x1/scale, y1/scale)
+            scale = getattr(self.app, "display_scale", 1.0) or 1.0
+            box = (x0 / scale, y0 / scale, x1 / scale, y1 / scale)
             # Replace below with code to create and add Layer object properly
             new_region = self._create_layer(box)
             self.layer_manager.add_layer(new_region)
             self.selected_region = len(self.layer_manager.layers) - 1
             self._redraw(canvas)
+            
+            if hasattr(self.app, "_refresh_region_list"):
+                self.app._refresh_region_list()
+                
             return
 
         if self._dragging or self._resizing:
@@ -160,6 +166,92 @@ class EditorTools:
             pass  # Implement composite drawing logic here
 
     def _create_layer(self, box):
-        # Creates a new Layer instance with default settings
-        shape = 'rectangle'  # Or get from UI state
-        return Layer(shape=shape, coords=box, method='blur', intensity=10, size=0)
+        # Default fallbacks if UI not yet available
+        shape = 'rectangle'
+        method = 'blur'
+        intensity = 10
+        size = 0
+
+        # Pull values from window/editor panel if they exist
+        if hasattr(self.app, "shape_var"):
+            shape = self.app.shape_var.get()
+        if hasattr(self.app, "method_var"):
+            method = self.app.method_var.get()
+        if hasattr(self.app, "intensity_var"):
+            intensity = int(self.app.intensity_var.get())
+        if hasattr(self.app, "size_var"):
+            size = int(self.app.size_var.get())
+        return Layer(shape=shape, coords=box, method=method, intensity=intensity, size=size)
+
+    def _redraw(self, canvas):
+        """Redraw all region overlays."""
+        # Remove previous overlays and handles
+        canvas.delete(REGION_TAG)
+        canvas.delete(HANDLE_TAG)
+
+        for idx, layer in enumerate(self.layer_manager.layers):
+            x1, y1, x2, y2 = layer.coords
+            if layer.shape in ("circle", "oval"):
+                canvas.create_oval(
+                    x1, y1, x2, y2,
+                    outline="red",
+                    width=2,
+                    tags=REGION_TAG
+                )
+            else:
+                canvas.create_rectangle(
+                    x1, y1, x2, y2,
+                    outline="red",
+                    width=2,
+                    tags=REGION_TAG
+                )
+
+        # Draw resize handles for the selected region
+        if self.selected_region is not None and 0 <= self.selected_region < len(self.layer_manager.layers):
+            self._draw_resize_handles(canvas, self.layer_manager.layers[self.selected_region])
+
+
+    def circle_region(self):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.shape = 'circle' if layer.shape != 'circle' else 'rectangle'
+            # This should handle drawing circles on the canvas to redact things within that circle. When drawn, it should be added to the layers and should be editable when selected.
+
+    def rectangle_region(self):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.shape = 'rectangle' if layer.shape != 'rectangle' else 'circle'
+
+    def set_blur_method(self):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.method = 'blur'
+
+    def set_pixelate_method(self):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.method = 'pixelate'
+
+    def set_redact_method(self):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.method = 'redact'
+
+    def set_intensity(self, intensity):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.intensity = intensity
+
+    def set_size(self, size):
+        if self.selected_region is not None:
+            layer = self.layer_manager.layers[self.selected_region]
+            layer.size = size
+
+    def delete_region(self):
+        if self.selected_region is not None:
+            self.layer_manager.remove_layer(self.selected_region)
+            self.selected_region = None
+
+    def clear_all_regions(self):
+        self.layer_manager.clear_layers()
+        self.selected_region = None
