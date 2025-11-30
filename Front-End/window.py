@@ -120,7 +120,7 @@ class ImageRedactorApp(customtkinter.CTk):
         self.selected_layer = None
         self.editor_tools.clear_selection()
         self.show_editor_panel()
-        
+
     def show_editor_panel(self):
         # Clear previous widgets
         for child in self.editor_inner.winfo_children():
@@ -170,12 +170,116 @@ class ImageRedactorApp(customtkinter.CTk):
         self.size_var = tk.IntVar(value=0)
         customtkinter.CTkSlider(self.editor_inner, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
 
-        make_label('Regions:').pack(anchor='w', padx=8, pady=(8,0))
-        self.region_listbox = tk.Listbox(self.editor_inner, height=6, fg=text_color, bg=bg_color, selectbackground='#667761')
-        self.region_listbox.pack(fill='both', padx=8, pady=4)
-        self.region_listbox.bind('<<ListboxSelect>>', self._on_region_select)
+        make_label('Regions:').pack(anchor='w', padx=8, pady=(8, 0))
 
-        self._refresh_region_list()
+        # container for region rows
+        self.region_container = customtkinter.CTkScrollableFrame(
+            self.editor_inner,
+            fg_color=bg_color  # match background
+        )
+        self.region_container.pack(fill='both', expand=True, padx=8, pady=4)
+
+        # build rows
+        self._build_region_rows()
+
+    def _build_region_rows(self):
+        """Rebuild region rows with dropdown details."""
+        # Clear existing children
+        for child in self.region_container.winfo_children():
+            child.destroy()
+
+        scale = getattr(self, "display_scale", 1.0) or 1.0
+
+        for idx, layer in enumerate(self.layer_manager.layers):
+            row_frame = customtkinter.CTkFrame(
+                self.region_container,
+                fg_color="transparent"
+            )
+            row_frame.pack(fill="x", pady=2)
+
+            # Header line: index + summary
+            summary = f"{idx+1}: {layer.shape} - {layer.method}"
+            header_btn = customtkinter.CTkButton(
+                row_frame,
+                text=summary,
+                fg_color="#545E56",
+                hover_color="#667761",
+                command=lambda i=idx: self.editor_tools.select_region(i),
+            )
+            header_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+            # Toggle button to show/hide details
+            toggle_btn = customtkinter.CTkButton(
+                row_frame,
+                text="⋯",
+                width=32,
+                fg_color="#545E56",
+                hover_color="#667761"
+            )
+            toggle_btn.pack(side="right")
+
+            # Details frame (start hidden)
+            details = customtkinter.CTkFrame(
+                self.region_container,
+                fg_color=self.theme_colors.get(
+                    'dark_bg' if customtkinter.get_appearance_mode() == 'Dark' else 'light_bg',
+                    "#1B1B1E"
+                )
+            )
+
+            # Coordinates (canvas units)
+            x1, y1, x2, y2 = layer.coords
+            cx1, cy1 = int(x1 * scale), int(y1 * scale)
+            cx2, cy2 = int(x2 * scale), int(y2 * scale)
+            coord_text = f"Coords: ({cx1}, {cy1}) → ({cx2}, {cy2})"
+
+            coord_label = customtkinter.CTkLabel(
+                details,
+                text=coord_text
+            )
+            coord_label.pack(anchor="w", padx=8, pady=(4, 0))
+
+            # Intensity only for blur/pixelate
+            if layer.method in ("blur", "pixelate"):
+                inten_label = customtkinter.CTkLabel(
+                    details,
+                    text=f"Intensity: {layer.intensity}"
+                )
+                inten_label.pack(anchor="w", padx=8, pady=(2, 0))
+
+            # Buttons row
+            btn_row = customtkinter.CTkFrame(details, fg_color="transparent")
+            btn_row.pack(fill="x", padx=4, pady=4)
+
+            copy_btn = customtkinter.CTkButton(
+                btn_row,
+                text="Copy",
+                width=60,
+                fg_color="#545E56",
+                hover_color="#667761",
+                command=lambda i=idx: self.editor_tools.copy_region(i)
+            )
+            copy_btn.pack(side="left", padx=4)
+
+            delete_btn = customtkinter.CTkButton(
+                btn_row,
+                text="Delete",
+                width=70,
+                fg_color="#545E56",
+                hover_color="#667761",
+                command=lambda i=idx: self.editor_tools.delete_region(i)
+            )
+            delete_btn.pack(side="left", padx=4)
+
+            # Toggle behavior
+            def toggle_details(frame=details):
+                if frame.winfo_ismapped():
+                    frame.pack_forget()
+                else:
+                    frame.pack(fill="x", padx=12, pady=(0, 4))
+
+            toggle_btn.configure(command=toggle_details)
+
 
     def _on_region_select(self, event):
         """Handle selection changes in the regions Listbox."""
@@ -197,18 +301,9 @@ class ImageRedactorApp(customtkinter.CTk):
             self.editor_tools.select_region(idx)
 
     def _refresh_region_list(self):
-        """Rebuild the regions Listbox from LayerManager.layers."""
-        if not hasattr(self, "region_listbox"):
-            return
-
-        # Clear current entries
-        self.region_listbox.delete(0, tk.END)
-
-        # Repopulate from layers
-        for idx, layer in enumerate(self.layer_manager.layers):
-            desc = f"{idx+1}: {layer.shape} - {layer.method}"
-            self.region_listbox.insert(tk.END, desc)
-
+        """Rebuild the regions panel from LayerManager.layers."""
+        if hasattr(self, "region_container"):
+            self._build_region_rows()
 
         
     def save_image(self):
