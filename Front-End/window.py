@@ -1,700 +1,419 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, BooleanVar
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
-from ctypes import windll
 import customtkinter
-import shutil
-import os
-import json
+from layer_manager import LayerManager
+from editor_tools import EditorTools
+
 
 class ImageRedactorApp(customtkinter.CTk):
     def __init__(self):
-        # Initialize the main window
-        # Configure customtkinter appearance and load a custom theme file if available.
-        # Use 'System' as default so we don't forcibly override a user's desired start mode.
-        customtkinter.set_appearance_mode("System")  # Modes: "System", "Dark", "Light"
-        # Build an absolute, OS-safe path to the theme file (avoid backslash-escape issues)
-        theme_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "themes", "BlankIt_theme.json"))
-        self.theme_path = theme_path
-        if os.path.isfile(theme_path):
-            try:
-                customtkinter.set_default_color_theme(theme_path)
-            except Exception as e:
-                # If loading the theme fails, fall back to the default theme and print a warning.
-                print(f"Warning: failed to load custom theme {theme_path}: {e}")
-        else:
-            print(f"Warning: theme file not found at {theme_path}, using default theme")
-
-        # Default colors (used for non-CTk widgets like Canvas).
-        # These can be overridden by values present in the theme JSON if available.
-        self.theme_colors = {
-            'light_bg': '#EAE1DF',
-            'dark_bg': '#1B1B1E',
-            'widget': '#667761',
-            'text': '#917C78'
-        }
-        # Try to load color overrides from the theme JSON if it exists.
-        if os.path.isfile(self.theme_path):
-            try:
-                with open(self.theme_path, 'r', encoding='utf-8') as f:
-                    theme_json = json.load(f)
-                # Look for common keys in theme JSON to override defaults.
-                # customtkinter theme files vary; we attempt a few heuristic keys.
-                colors = theme_json.get('colors') if isinstance(theme_json, dict) else None
-                if isinstance(colors, dict):
-                    # Possible keys: 'background', 'bg_color', 'dark_bg', 'light_bg'
-                    for key in ('background', 'bg_color', 'light_bg', 'dark_bg'):
-                        if key in colors and isinstance(colors[key], str) and colors[key].startswith('#'):
-                            # Map 'background' or 'bg_color' to light_bg if present
-                            if key in ('background', 'bg_color'):
-                                self.theme_colors['light_bg'] = colors[key]
-                            else:
-                                self.theme_colors[key] = colors[key]
-            except Exception:
-                # Non-fatal: fall back to defaults already set above
-                pass
         super().__init__()
+        self.theme_colors = {
+            "dark_bg": "#1B1B1E",
+            "light_bg": "#EAE1DF",
+        }
         self.title("BlankIt")
-        # iconbitmap expects an absolute or relative path; keep the same relative path
-        try:
-            self.iconbitmap(os.path.join(os.path.dirname(__file__), "Icons", "Blankit.ico"))
-        except Exception:
-            # ignore if icon can't be loaded
-            pass
-        # Start smaller and centered (allow user to resize). Use a sensible default but keep it on-screen.
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        default_w = 900
-        default_h = 600
-        width = min(default_w, max(400, screen_width - 200))
-        height = min(default_h, max(300, screen_height - 200))
-        center_x = max(0, screen_width // 2 - width // 2)
-        center_y = max(0, screen_height // 2 - height // 2)
-        # Set initial geometry once at startup
-        try:
-            self.geometry(f'{width}x{height}+{center_x}+{center_y}')
-        except Exception:
-            pass
+        self.geometry("900x600")
+        self.layer_manager = LayerManager()
+        self.editor_tools = EditorTools(self.layer_manager, self)
+        self.selected_layer = None
+        self._handles = {}
+        self._move_handle_id = None
+        self._moving_group = False
         self.image = None
-        self.canvas_image = None
-        # Create toolbar first so it is always at the top
+        self.original_image = None
+        self.display_image = None
+        self.display_scale = 1.0
+        self.canvas_image_id = None
         self.create_toolbar()
-
-        # Initial message (use customtkinter label so the theme applies)
-        # Colors: light mode welcome(#BDB6B5), dark mode welcome(#43434A)
-        self.welcome_colors = ("#BDB6B5", "#43434A")
-        self.header_label = customtkinter.CTkLabel(self, text="Welcome to BlankIt! Upload an image to get started.", font=("Arial", 14), fg_color=self.welcome_colors)
-        self.header_label.pack(pady=8, padx=12, fill='x')
-        # TODO: Display logo on startup (This should be done while starting the back end & ML model in the background)
-        # Display logo on app home page before image upload (Image at Front-End\Icons\Logo.png)
-        # Style lightmode and dark mode using these colors: #667761 (widget), #917C78(Text/widget), #545E56(Text/widget), #1B1B1E (Dark mode background), #EAE1DF (light mode background)
-
-        self.create_widgets()
-        # Apply the current appearance to non-CTk widgets and header so start-up matches dark/light mode
-        try:
-            self.apply_initial_appearance()
-        except Exception:
-            pass
-
-    def create_widgets(self):
-        # Upload Button (use CTkButton so theme affects widget)
-        self.upload_btn = customtkinter.CTkButton(self, text="Upload Photo", command=self.upload_photo)
-        self.upload_btn.pack(pady=10)
-
-        # Content frame holds canvas and editor panel side-by-side
-        self.content_frame = customtkinter.CTkFrame(self, fg_color="transparent")
-        self.content_frame.pack(expand=True, fill='both', padx=8, pady=8)
-
-        # Canvas to display image with scrollbars (container)
-        self.canvas_container = customtkinter.CTkFrame(self.content_frame, fg_color='transparent')
-        self.canvas_container.pack(side='left', expand=True, fill='both')
-
-        # Horizontal and vertical scrollbars
-        self.v_scroll = tk.Scrollbar(self.canvas_container, orient='vertical')
-        self.h_scroll = tk.Scrollbar(self.canvas_container, orient='horizontal')
-        self.canvas = tk.Canvas(self.canvas_container, bg=self.theme_colors.get('light_bg', 'grey'), width=400, height=400, bd=0, highlightthickness=0,
-                     yscrollcommand=self.v_scroll.set, xscrollcommand=self.h_scroll.set)
-        self.v_scroll.config(command=self.canvas.yview)
-        self.h_scroll.config(command=self.canvas.xview)
-        # layout
-        self.canvas.grid(row=0, column=0, sticky='nsew')
-        self.v_scroll.grid(row=0, column=1, sticky='ns')
-        self.h_scroll.grid(row=1, column=0, sticky='ew')
-        # hide scrollbars until an image is loaded and content overflows
-        try:
-            self.v_scroll.grid_remove()
-            self.h_scroll.grid_remove()
-        except Exception:
-            pass
-        self.canvas_container.grid_rowconfigure(0, weight=1)
-        self.canvas_container.grid_columnconfigure(0, weight=1)
-
-        # Mouse wheel scroll bindings (Windows standard). Bind to canvas only so other widgets receive wheel events.
-        self.canvas.bind('<Enter>', lambda e: self.canvas.focus_set())
-        self.canvas.bind('<MouseWheel>', self._on_mousewheel)
-
-        # Editor panel (created as empty for now; populated after upload)
-        self.editor_frame = customtkinter.CTkFrame(self.content_frame, width=280)
-        self.editor_frame.pack(side='right', fill='y', padx=(8,0), pady=4)
-        # Make the editor panel scrollable: prefer CTkScrollableFrame if available, else canvas+frame fallback
-        try:
-            # CTkScrollableFrame exists in newer customtkinter versions
-            self.editor_scroll = customtkinter.CTkScrollableFrame(self.editor_frame, width=260)
-            self.editor_scroll.pack(fill='both', expand=True, padx=6, pady=6)
-            self.editor_inner = self.editor_scroll
-        except Exception:
-            # Fallback: create a canvas + inner frame with a vertical scrollbar
-            self.editor_canvas = tk.Canvas(self.editor_frame, bd=0, highlightthickness=0)
-            self.editor_vscroll = tk.Scrollbar(self.editor_frame, orient='vertical', command=self.editor_canvas.yview)
-            self.editor_canvas.configure(yscrollcommand=self.editor_vscroll.set)
-            self.editor_vscroll.pack(side='right', fill='y')
-            self.editor_canvas.pack(side='left', fill='both', expand=True)
-            self.editor_inner = customtkinter.CTkFrame(self.editor_canvas, fg_color='transparent')
-            self.editor_canvas.create_window((0,0), window=self.editor_inner, anchor='nw')
-            # keep scrollregion updated
-            def _on_editor_config(e):
-                try:
-                    self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox('all'))
-                except Exception:
-                    pass
-            self.editor_inner.bind('<Configure>', _on_editor_config)
-        # bind mousewheel for editor scrolling (works for both CTkScrollableFrame and fallback)
-        try:
-            # If using CTkScrollableFrame, bind its inner frame
-            if hasattr(self, 'editor_inner'):
-                self.editor_inner.bind('<Enter>', lambda e: self.editor_inner.focus_set())
-                self.editor_inner.bind('<MouseWheel>', self._on_editor_mousewheel)
-        except Exception:
-            pass
-
-        # Initially hidden: show a label prompting to upload
-        self.editor_placeholder = customtkinter.CTkLabel(self.editor_inner, text='Upload an image to see editing options')
-        self.editor_placeholder.pack(padx=12, pady=12)
-
-        # Region data
-        self.regions = []  # list of dicts: {'coords':(x1,y1,x2,y2), 'method':..., 'intensity':..., 'size':...}
-        self.selected_region_index = None
-        self.selection_mode = False
-        self.region_clipboard = None
+        self.create_main_widgets()
+        self.apply_initial_appearance()
 
     def create_toolbar(self):
-        """Create a CTk-styled toolbar that replaces the native menu for consistent theming."""
-        # Toolbar frame (use navbar main color)
-        try:
-            toolbar_color = ("#545E56", "#545E56")
-            btn_fg = ("#545E56", "#545E56")
-            btn_hover = ("#667761", "#667761")
-            btn_text = ("#1B1B1E", "#1B1B1E")
-            self.toolbar = customtkinter.CTkFrame(self, fg_color=toolbar_color)
-            self.toolbar.pack(side="top", fill="x", padx=0, pady=0)
+        toolbar = customtkinter.CTkFrame(self, fg_color="#545E56")
+        toolbar.pack(side="top", fill="x")
+        btn_fg = "#545E56"
+        btn_hover = "#667761"
+        btn_text = "#1B1B1E"
+        btn_open = customtkinter.CTkButton(toolbar, text="Open", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.upload_photo)
+        btn_open.pack(side="left", padx=5, pady=5)
+        btn_save = customtkinter.CTkButton(toolbar, text="Save", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.save_image)
+        btn_save.pack(side="left", padx=5, pady=5)
+        btn_exit = customtkinter.CTkButton(toolbar, text="Exit", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.quit)
+        btn_exit.pack(side="left", padx=5, pady=5)
+        self.dark_mode_switch = customtkinter.CTkSwitch(toolbar, text="Dark Mode", command=self.toggle_dark_mode)
+        self.dark_mode_switch.pack(side="right", padx=5, pady=5)
 
-            # Open button
-            open_btn = customtkinter.CTkButton(self.toolbar, text="Open", command=self.upload_photo,
-                                              fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
-            open_btn.pack(side="left", padx=(8, 4), pady=6)
-
-            # Save button
-            save_btn = customtkinter.CTkButton(self.toolbar, text="Save", command=self.save_image,
-                                              fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
-            save_btn.pack(side="left", padx=4, pady=6)
-
-            # Exit button
-            exit_btn = customtkinter.CTkButton(self.toolbar, text="Exit", command=self.quit,
-                                              fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text)
-            exit_btn.pack(side="left", padx=4, pady=6)
-
-            # Spacer
-            spacer = customtkinter.CTkLabel(self.toolbar, text="", fg_color="transparent")
-            spacer.pack(side="left", expand=True)
-
-            # Dark mode switch (right-aligned)
-            self.dark_switch = customtkinter.CTkSwitch(self.toolbar, text="Dark Mode", command=self.darkMode)
-            # initialize switch state based on current appearance
-            try:
-                self.dark_switch.select() if customtkinter.get_appearance_mode() == 'Dark' else self.dark_switch.deselect()
-            except Exception:
-                pass
-            self.dark_switch.pack(side="right", padx=10, pady=6)
-
-        except Exception as e:
-            # If custom toolbar can't be created, fall back to native menu to avoid losing functionality
-            print(f"Warning: failed to create CTk toolbar: {e}")
-            self._create_native_menu_fallback()
-
-    def _create_native_menu_fallback(self):
-        menubar = tk.Menu(self)
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Open Image", command=self.upload_photo)
-        file_menu.add_command(label="Save Image", command=self.save_image)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.quit)
-        menubar.add_cascade(label="File", menu=file_menu)
-        view_menu = tk.Menu(menubar, tearoff=0)
-        # fallback boolean
-        self.darkmode = BooleanVar()
-        view_menu.add_checkbutton(label="Dark Mode", onvalue=1, offvalue=0, variable=self.darkmode, command=self.darkMode)
-        menubar.add_cascade(label="View", menu=view_menu)
-        self.config(menu=menubar)
+    def create_main_widgets(self):
+        self.content_frame = customtkinter.CTkFrame(self)
+        self.content_frame.pack(fill="both", expand=True, padx=8, pady=8)
+        
+        # Left canvas and scrollbars
+        self.canvas_container = customtkinter.CTkFrame(self.content_frame, fg_color="transparent")
+        self.canvas_container.pack(side="left", fill="both", expand=True)
+        
+        self.v_scroll = tk.Scrollbar(self.canvas_container, orient="vertical")
+        self.h_scroll = tk.Scrollbar(self.canvas_container, orient="horizontal")
+        self.canvas = tk.Canvas(self.canvas_container, bg="#EAE1DF", bd=0, highlightthickness=0,
+                                yscrollcommand=self.v_scroll.set, xscrollcommand=self.h_scroll.set)
+        self.v_scroll.config(command=self.canvas.yview)
+        self.h_scroll.config(command=self.canvas.xview)
+        
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.v_scroll.grid(row=0, column=1, sticky="ns")
+        self.h_scroll.grid(row=1, column=0, sticky="ew")
+        self.canvas_container.grid_rowconfigure(0, weight=1)
+        self.canvas_container.grid_columnconfigure(0, weight=1)
+        
+        # Right editor panel (scrollable with canvas + inner CTkFrame)
+        self.editor_frame = customtkinter.CTkFrame(self.content_frame, width=280)
+        self.editor_frame.pack(side="right", fill="y", padx=(8,0), pady=4)
+        
+        self.editor_canvas = tk.Canvas(self.editor_frame, bd=0, highlightthickness=0)
+        self.editor_vscroll = tk.Scrollbar(self.editor_frame, orient="vertical", command=self.editor_canvas.yview)
+        self.editor_canvas.configure(yscrollcommand=self.editor_vscroll.set)
+        self.editor_vscroll.pack(side="right", fill="y")
+        self.editor_canvas.pack(side="left", fill="both", expand=True)
+        
+        self.editor_inner = customtkinter.CTkFrame(self.editor_canvas, fg_color="#EAE1DF")
+        self.editor_canvas.create_window((0,0), window=self.editor_inner, anchor='nw')
+        
+        self.editor_inner.bind("<Configure>", lambda e: self.editor_canvas.configure(scrollregion=self.editor_canvas.bbox("all")))
+        self.editor_canvas.bind("<Enter>", lambda e: self.editor_canvas.focus_set())
+        self.editor_canvas.bind("<MouseWheel>", self._on_editor_mousewheel)
+        
+        # Add initial placeholder label
+        self.editor_placeholder = customtkinter.CTkLabel(self.editor_inner, text="Upload an image to see editing options")
+        self.editor_placeholder.pack(padx=12, pady=12)
+        
+        # Bind canvas events for editing
+        self.canvas.bind("<Button-1>", self.editor_tools.on_mouse_down)
+        self.canvas.bind("<B1-Motion>", self.editor_tools.on_mouse_move)
+        self.canvas.bind("<ButtonRelease-1>", self.editor_tools.on_mouse_up)
 
     def upload_photo(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp")])
-        if file_path:
-            # Load full PIL image and keep original for edits
-            pil = Image.open(file_path).convert('RGBA')
-            self.original_image = pil.copy()
-            # fit image into canvas viewport while preserving aspect
-            max_dim = 800
-            w, h = pil.size
-            scale = min(max_dim / w, max_dim / h, 1.0)
-            disp_w, disp_h = int(w * scale), int(h * scale)
-            self.display_scale = scale
-            self.display_image = pil.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-            self.tk_image = ImageTk.PhotoImage(self.display_image)
-            self.canvas.delete("all")
-            # configure canvas virtual size and display image at origin
-            self.canvas.config(width=min(disp_w, self.winfo_width()//2), height=min(disp_h, self.winfo_height()//2))
-            self.canvas_image = self.canvas.create_image(0, 0, anchor='nw', image=self.tk_image)
-            # Update scrollregion so scrollbars work and show scrollbars if content overflows
-            try:
-                self.canvas.configure(scrollregion=(0, 0, disp_w, disp_h))
-                # show scrollbars if image is larger than canvas viewport
-                if disp_h > self.canvas.winfo_height():
-                    self.v_scroll.grid()
-                else:
-                    try:
-                        self.v_scroll.grid_remove()
-                    except Exception:
-                        pass
-                if disp_w > self.canvas.winfo_width():
-                    self.h_scroll.grid()
-                else:
-                    try:
-                        self.h_scroll.grid_remove()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            # clear regions and show editor
-            self.regions = []
-            self.selected_region_index = None
-            self.show_editor_panel()
-            # Bind drag to allow user to add manual regions
-            self.canvas.bind('<ButtonPress-1>', self._on_canvas_press)
-            self.canvas.bind('<B1-Motion>', self._on_canvas_drag)
-            self.canvas.bind('<ButtonRelease-1>', self._on_canvas_release)
-            # TODO: Add image editing tools (blur, redact, etc.)
-            # See: https://hackr.io/blog/how-to-create-a-python-image-editor-app
-
-    def save_image(self):
-        if self.image:
-            # TODO: Save the current image after edits, remove metadata, etc.
-            # See: https://www.geeksforgeeks.org/python/save-image-to-file-in-python-using-tkinter/
-            messagebox.showinfo("Save", "Save feature to be implemented.")
+        if not file_path:
+            return
+        pil = Image.open(file_path).convert('RGBA')
+        self.original_image = pil.copy()
+        
+        max_dim = 800
+        w, h = pil.size
+        self.display_scale = min(max_dim / w, max_dim / h, 1.0)
+        disp_w, disp_h = int(w * self.display_scale), int(h * self.display_scale)
+        self.display_image = pil.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+        self.tk_image = ImageTk.PhotoImage(self.display_image)
+        
+        self.canvas.delete("all")
+        self.canvas.config(width=min(disp_w, self.winfo_width()//2), height=min(disp_h, self.winfo_height()//2))
+        self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.tk_image)
+        self.canvas.configure(scrollregion=(0, 0, disp_w, disp_h))
+        
+        if disp_h > self.canvas.winfo_height():
+            self.v_scroll.grid()
         else:
-            messagebox.showwarning("No image", "No image to save!")
+            self.v_scroll.grid_remove()
+        if disp_w > self.canvas.winfo_width():
+            self.h_scroll.grid()
+        else:
+            self.h_scroll.grid_remove()
+        
+        self.layer_manager.clear_layers()
+        self.selected_layer = None
+        self.editor_tools.clear_selection()
+        self.show_editor_panel()
 
-    # ------- Editor and region handling -------
     def show_editor_panel(self):
-        # Remove placeholder
-        for child in self.editor_frame.winfo_children():
+        # Clear previous widgets
+        for child in self.editor_inner.winfo_children():
             child.destroy()
 
-        # Controls: method, intensity, size, add/remove, listbox of regions, copy/paste
-        customtkinter.CTkLabel(self.editor_frame, text='Edit Regions').pack(pady=(8,4))
+        mode = customtkinter.get_appearance_mode()  # Assume no errors here
 
-        customtkinter.CTkLabel(self.editor_frame, text='Redaction method:').pack(anchor='w', padx=8)
+        if mode == 'Dark':
+            bg_color = self.theme_colors.get('dark_bg', '#1B1B1E')
+            text_color = "#EAE1DF"
+        else:
+            bg_color = self.theme_colors.get('light_bg', '#EAE1DF')
+            text_color = "#1B1B1E"
+
+        self.editor_inner.configure(fg_color=bg_color)  # Background for editor panel
+
+        # Helper to create labels with explicit color
+        def make_label(text):
+            return customtkinter.CTkLabel(self.editor_inner, text=text, text_color=text_color)
+
+        # Helper to create radio buttons with explicit color
+        def make_radiobutton(text, var, val):
+            return customtkinter.CTkRadioButton(self.editor_inner, text=text, variable=var, value=val, text_color=text_color)
+
+        #Selector for selection or drawing mode
+        self.edit_mode_var = tk.StringVar(value="draw")  # default to draw
+
+        mode_frame = customtkinter.CTkFrame(self.editor_inner, fg_color="transparent")
+        mode_frame.pack(fill="x", padx=8, pady=(8, 4))
+
+        mode_label = customtkinter.CTkLabel(
+            mode_frame,
+            text="Mode:",
+            text_color=text_color
+        )
+        mode_label.pack(side="left", padx=(0, 8))
+
+        self.mode_segmented = customtkinter.CTkSegmentedButton(
+            mode_frame,
+            values=["select", "draw"],
+            command=self._on_mode_change
+        )
+        self.mode_segmented.pack(side="left", fill="x", expand=True)
+        self.mode_segmented.set("draw")
+
+        # Build UI controls
+        make_label('Edit Regions').pack(pady=(8,4))
+
+        make_label('Redaction method:').pack(anchor='w', padx=8)
         self.method_var = tk.StringVar(value='blur')
         methods = ['blur', 'redact', 'pixelate', 'none']
-        # create radio buttons and store them so we can update text color on appearance changes
-        self.method_rbs = []
-        mode = None
-        try:
-            mode = customtkinter.get_appearance_mode()
-        except Exception:
-            mode = 'Light'
-        rb_text_color = '#BDB6B5' if mode == 'Dark' else None
         for m in methods:
-            rb = customtkinter.CTkRadioButton(self.editor_frame, text=m.title(), variable=self.method_var, value=m, text_color=rb_text_color)
+            rb = make_radiobutton(m.title(), self.method_var, m)
             rb.pack(anchor='w', padx=12, pady=2)
-            self.method_rbs.append(rb)
 
-        customtkinter.CTkLabel(self.editor_frame, text='Intensity:').pack(anchor='w', padx=8, pady=(8,0))
+        make_label('Shape:').pack(anchor='w', padx=8, pady=(8,0))
+        self.shape_var = tk.StringVar(value='rectangle')
+        shapes = ['rectangle', 'circle', 'oval']
+        for s in shapes:
+            rb = make_radiobutton(s.capitalize(), self.shape_var, s)
+            rb.pack(anchor='w', padx=12, pady=2)
+
+        make_label('Intensity:').pack(anchor='w', padx=8, pady=(8,0))
         self.intensity_var = tk.IntVar(value=10)
-        customtkinter.CTkSlider(self.editor_frame, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
+        customtkinter.CTkSlider(self.editor_inner, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
 
-        customtkinter.CTkLabel(self.editor_frame, text='Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
+        make_label('Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
         self.size_var = tk.IntVar(value=0)
-        customtkinter.CTkSlider(self.editor_frame, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
+        customtkinter.CTkSlider(self.editor_inner, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
 
-        # Region list
-        customtkinter.CTkLabel(self.editor_frame, text='Regions:').pack(anchor='w', padx=8, pady=(8,0))
-        self.region_listbox = tk.Listbox(self.editor_frame, height=6)
-        self.region_listbox.pack(fill='both', padx=8, pady=4)
-        self.region_listbox.bind('<<ListboxSelect>>', self._on_region_select)
+        make_label('Regions:').pack(anchor='w', padx=8, pady=(8, 0))
 
-        # removed 'Add from AI' and 'Delete' buttons per user request
+        # container for region rows
+        self.region_container = customtkinter.CTkScrollableFrame(
+            self.editor_inner,
+            fg_color=bg_color  # match background
+        )
+        self.region_container.pack(fill='both', expand=True, padx=8, pady=4)
 
-        cp_frame = customtkinter.CTkFrame(self.editor_frame, fg_color='transparent')
-        cp_frame.pack(fill='x', padx=8, pady=6)
-        customtkinter.CTkButton(cp_frame, text='Copy Settings', command=self._copy_region_settings).pack(side='left', padx=4)
-        customtkinter.CTkButton(cp_frame, text='Paste to Selected', command=self._paste_region_settings).pack(side='left', padx=4)
-        customtkinter.CTkButton(cp_frame, text='Paste to All', command=self._paste_to_all).pack(side='left', padx=4)
-        customtkinter.CTkButton(self.editor_frame, text='Remove Metadata', command=self._remove_metadata).pack(pady=6)
+        # build rows
+        self._build_region_rows()
 
-        # draw existing regions if any
-        self._refresh_region_list()
+    def _build_region_rows(self):
+        """Rebuild region rows with dropdown details."""
+        # Clear existing children
+        for child in self.region_container.winfo_children():
+            child.destroy()
 
-    def _on_editor_mousewheel(self, event):
-        """Scroll the editor_inner when the mousewheel is used over the settings area."""
-        try:
-            delta = int(event.delta)
-        except Exception:
-            try:
-                delta = 120 if event.delta > 0 else -120
-            except Exception:
-                delta = 0
-        # Scroll up for positive delta
-        try:
-            if delta > 0:
-                if hasattr(self, 'editor_canvas'):
-                    self.editor_canvas.yview_scroll(-1, 'units')
-                else:
-                    # CTkScrollableFrame will respond to yview_scroll as well
-                    try:
-                        self.editor_inner.yview_scroll(-1, 'units')
-                    except Exception:
-                        pass
+        scale = getattr(self, "display_scale", 1.0) or 1.0
+
+        for idx, layer in enumerate(self.layer_manager.layers):
+            row_frame = customtkinter.CTkFrame(
+                self.region_container,
+                fg_color="transparent"
+            )
+            row_frame.pack(fill="x", pady=2)
+
+            # Header line: index + summary
+            summary = f"{idx+1}: {layer.shape} - {layer.method}"
+
+            # Determine if this index is selected
+            is_selected = (
+                hasattr(self.editor_tools, "selected_regions")
+                and idx in self.editor_tools.selected_regions
+            )
+
+            if is_selected:
+                row_fg = "#667761"   # highlighted background
+                row_text = "#EAE1DF" # light text
             else:
-                if hasattr(self, 'editor_canvas'):
-                    self.editor_canvas.yview_scroll(1, 'units')
+                row_fg = "#545E56"
+                row_text = "#1B1B1E"
+
+            header_btn = customtkinter.CTkButton(
+                row_frame,
+                text=summary,
+                fg_color=row_fg,
+                hover_color="#667761",
+                text_color=row_text,
+                command=lambda i=idx: self.editor_tools.select_region(i),
+            )
+            header_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+
+            # Toggle button to show/hide details
+            toggle_btn = customtkinter.CTkButton(
+                row_frame,
+                text="⋯",
+                width=32,
+                fg_color="#545E56",
+                hover_color="#667761"
+            )
+            toggle_btn.pack(side="right")
+
+            # Details frame (start hidden)
+            details = customtkinter.CTkFrame(
+                self.region_container,
+                fg_color=self.theme_colors.get(
+                    'dark_bg' if customtkinter.get_appearance_mode() == 'Dark' else 'light_bg',
+                    "#1B1B1E"
+                )
+            )
+
+            # Coordinates (canvas units)
+            x1, y1, x2, y2 = layer.coords
+            cx1, cy1 = int(x1 * scale), int(y1 * scale)
+            cx2, cy2 = int(x2 * scale), int(y2 * scale)
+            coord_text = f"Coords: ({cx1}, {cy1}) → ({cx2}, {cy2})"
+
+            coord_label = customtkinter.CTkLabel(
+                details,
+                text=coord_text
+            )
+            coord_label.pack(anchor="w", padx=8, pady=(4, 0))
+
+            # Intensity only for blur/pixelate
+            if layer.method in ("blur", "pixelate"):
+                inten_label = customtkinter.CTkLabel(
+                    details,
+                    text=f"Intensity: {layer.intensity}"
+                )
+                inten_label.pack(anchor="w", padx=8, pady=(2, 0))
+
+            # Buttons row
+            btn_row = customtkinter.CTkFrame(details, fg_color="transparent")
+            btn_row.pack(fill="x", padx=4, pady=4)
+
+            copy_btn = customtkinter.CTkButton(
+                btn_row,
+                text="Copy",
+                width=60,
+                fg_color="#545E56",
+                hover_color="#667761",
+                command=lambda i=idx: self.editor_tools.copy_region(i)
+            )
+            copy_btn.pack(side="left", padx=4)
+
+            delete_btn = customtkinter.CTkButton(
+                btn_row,
+                text="Delete",
+                width=70,
+                fg_color="#545E56",
+                hover_color="#667761",
+                command=lambda i=idx: self.editor_tools.delete_region(i)
+            )
+            delete_btn.pack(side="left", padx=4)
+
+            # Toggle behavior
+            def toggle_details(frame=details):
+                if frame.winfo_ismapped():
+                    frame.pack_forget()
                 else:
-                    try:
-                        self.editor_inner.yview_scroll(1, 'units')
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    frame.pack(fill="x", padx=12, pady=(0, 4))
 
-    def _add_ai_regions(self):
-        # Placeholder for backend-provided regions; here we add a sample region in center
-        if not hasattr(self, 'display_image'):
-            return
-        w, h = self.display_image.size
-        box = (w//4, h//4, w*3//4, h*3//4)
-        self.regions.append({'coords': box, 'method': 'blur', 'intensity': 10, 'size': 0})
-        self._refresh_region_list()
-        self._draw_regions()
+            toggle_btn.configure(command=toggle_details)
 
-    # Canvas mouse handlers for manual region selection
-    def _on_canvas_press(self, event):
-        self._drag_start = (event.x, event.y)
-        # create temporary rectangle
-        self._temp_rect = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline='red')
+    def _on_mode_change(self, value: str):
+        """Update editor tools mode when segmented button changes."""
+        if hasattr(self, "edit_mode_var"):
+            self.edit_mode_var.set(value)
+        if hasattr(self, "editor_tools"):
+            self.editor_tools.set_mode(value)
 
-    def _on_canvas_drag(self, event):
-        if hasattr(self, '_temp_rect'):
-            x0, y0 = self._drag_start
-            self.canvas.coords(self._temp_rect, x0, y0, event.x, event.y)
-
-    def _on_canvas_release(self, event):
-        if hasattr(self, '_temp_rect'):
-            x0, y0 = self._drag_start
-            x1, y1 = event.x, event.y
-            self.canvas.delete(self._temp_rect)
-            self._temp_rect = None
-            # normalize coords and clamp
-            x0, x1 = sorted((max(x0,0), max(x1,0)))
-            y0, y1 = sorted((max(y0,0), max(y1,0)))
-            if abs(x1-x0) < 5 or abs(y1-y0) < 5:
-                return
-            # convert to original image coordinates
-            scale = getattr(self, 'display_scale', 1.0)
-            box = (int(x0/scale), int(y0/scale), int(x1/scale), int(y1/scale))
-            self.regions.append({'coords': box, 'method': self.method_var.get(), 'intensity': self.intensity_var.get(), 'size': self.size_var.get()})
-            self._refresh_region_list()
-            self._draw_regions()
-
-    def _refresh_region_list(self):
-        self.region_listbox.delete(0, 'end')
-        for i, r in enumerate(self.regions):
-            self.region_listbox.insert('end', f"#{i} {r['method']} {r['coords']}")
 
     def _on_region_select(self, event):
-        sel = self.region_listbox.curselection()
-        if not sel:
-            self.selected_region_index = None
+        """Handle selection changes in the regions Listbox."""
+        if not hasattr(self, "region_listbox"):
             return
-        idx = sel[0]
-        self.selected_region_index = idx
-        r = self.regions[idx]
-        # update controls to reflect selection
-        try:
-            self.method_var.set(r.get('method','blur'))
-            self.intensity_var.set(r.get('intensity',10))
-            self.size_var.set(r.get('size',0))
-        except Exception:
-            pass
-        self._draw_regions()
 
-    def _delete_selected_region(self):
-        if self.selected_region_index is None:
+        selection = self.region_listbox.curselection()
+        if not selection:
+            # Nothing selected
+            self.selected_layer = None
+            self.editor_tools.clear_selection()
             return
-        del self.regions[self.selected_region_index]
-        self.selected_region_index = None
-        self._refresh_region_list()
-        self._draw_regions()
 
-    def _copy_region_settings(self):
-        if self.selected_region_index is None:
+        idx = selection[0]
+        self.selected_layer = idx
+
+        # Inform editor tools about the selected region, if it has such a method
+        if hasattr(self.editor_tools, "select_region"):
+            self.editor_tools.select_region(idx)
+
+    def _refresh_region_list(self):
+        """Rebuild the regions panel from LayerManager.layers."""
+        if hasattr(self, "region_container"):
+            self._build_region_rows()
+
+        
+    def save_image(self):
+        if not self.original_image:
+            messagebox.showwarning("No Image", "Please upload an image first.")
             return
-        self.region_clipboard = dict(self.regions[self.selected_region_index])
-
-    def _paste_region_settings(self):
-        if self.region_clipboard is None or self.selected_region_index is None:
+        save_path = filedialog.asksaveasfilename(defaultextension=".png", 
+                                                    filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg")])
+        if not save_path:
             return
-        r = self.regions[self.selected_region_index]
-        for k in ('method','intensity','size'):
-            if k in self.region_clipboard:
-                r[k] = self.region_clipboard[k]
-        self._refresh_region_list()
-
-    def _paste_to_all(self):
-        if self.region_clipboard is None:
-            return
-        for r in self.regions:
-            for k in ('method','intensity','size'):
-                if k in self.region_clipboard:
-                    r[k] = self.region_clipboard[k]
-        self._refresh_region_list()
-
-    def _apply_to_selected(self):
-        if self.selected_region_index is None:
-            messagebox.showwarning('No region', 'Select a region first')
-            return
-        r = self.regions[self.selected_region_index]
-        # update region settings from controls
-        r['method'] = self.method_var.get()
-        r['intensity'] = self.intensity_var.get()
-        r['size'] = self.size_var.get()
-        # apply edit to original image
-        self._apply_redaction_to_image(r)
-        # refresh display
-        self._update_display_image()
-
-    def _draw_regions(self):
-        # clear any overlays (we use tags)
-        self.canvas.delete('region_overlay')
-        scale = getattr(self, 'display_scale', 1.0)
-        for i, r in enumerate(self.regions):
-            x1,y1,x2,y2 = [int(v*scale) for v in r['coords']]
-            color = 'yellow' if i==self.selected_region_index else 'red'
-            self.canvas.create_rectangle(x1,y1,x2,y2, outline=color, width=2, tags='region_overlay')
-
-    def _apply_redaction_to_image(self, region):
-        # Work on the original image then later update display
-        pil = getattr(self, 'original_image', None)
-        if pil is None:
-            return
-        x1,y1,x2,y2 = region['coords']
-        pad = int(region.get('size',0))
-        x1 = max(0, x1-pad); y1 = max(0, y1-pad); x2 = min(pil.width, x2+pad); y2 = min(pil.height, y2+pad)
-        box = (x1,y1,x2,y2)
-        roi = pil.crop(box)
-        method = region.get('method','blur')
-        intensity = int(region.get('intensity',10))
-        if method == 'blur':
-            from PIL import ImageFilter
-            blurred = roi.filter(ImageFilter.GaussianBlur(radius=intensity))
-            pil.paste(blurred, box)
-        elif method == 'redact':
-            fill = (0,0,0,255)
-            red = Image.new('RGBA', roi.size, fill)
-            pil.paste(red, box)
-        elif method == 'pixelate':
-            # downscale/upscale
-            small = roi.resize((max(1, roi.width//intensity), max(1, roi.height//intensity)), Image.NEAREST)
-            pixel = small.resize(roi.size, Image.NEAREST)
-            pil.paste(pixel, box)
-        elif method == 'none':
-            pass
-        # update original_image
-        self.original_image = pil
-
-    def _update_display_image(self):
-        pil = getattr(self, 'original_image', None)
-        if pil is None:
-            return
-        scale = getattr(self, 'display_scale', 1.0)
-        disp_w = int(pil.width*scale)
-        disp_h = int(pil.height*scale)
-        disp = pil.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-        self.display_image = disp
-        self.tk_image = ImageTk.PhotoImage(disp)
-        self.canvas.itemconfigure(self.canvas_image, image=self.tk_image)
-        # update scrollregion after resizing
-        try:
-            self.canvas.configure(scrollregion=(0, 0, disp_w, disp_h))
-        except Exception:
-            pass
-        self._draw_regions()
+        composite = self.layer_manager.merge_all(self.original_image)
+        composite.save(save_path)
+        messagebox.showinfo("Saved", "Redacted image saved successfully.")
 
     def _on_mousewheel(self, event):
-        """Support vertical scrolling and Ctrl+Wheel zoom on Windows.
-        If Ctrl is held, zoom the image in/out. Otherwise, scroll vertically.
-        """
-        # Only respond when canvas has focus to avoid interfering with other widgets
         try:
             focused = self.focus_get()
-            if focused is None:
+            if focused != self.canvas:
                 return
         except Exception:
             pass
 
-        # On Windows, event.delta is multiples of 120 per notch
         delta = 0
         try:
             delta = int(event.delta)
         except Exception:
-            # some systems provide event.delta as 1/-1
             try:
                 delta = 120 if event.delta > 0 else -120
             except Exception:
                 delta = 0
 
-        # If Ctrl is held, zoom
-        ctrl = (event.state & 0x0004) != 0
+        ctrl = (event.state & 0x0004) != 0  # Check if Ctrl key pressed
+
         if ctrl:
-            # positive delta => zoom in
             if delta > 0:
                 self._zoom_canvas(1.1)
             else:
                 self._zoom_canvas(0.9)
         else:
-            # Scroll vertically by units
+            # Vertical or horizontal scrolling
             try:
-                if delta > 0:
-                    self.canvas.yview_scroll(-1, 'units')
+                if event.state & 0x0001:  # Shift pressed for horizontal scroll
+                    if delta > 0:
+                        self.canvas.xview_scroll(-1, 'units')
+                    else:
+                        self.canvas.xview_scroll(1, 'units')
                 else:
-                    self.canvas.yview_scroll(1, 'units')
+                    if delta > 0:
+                        self.canvas.yview_scroll(-1, 'units')
+                    else:
+                        self.canvas.yview_scroll(1, 'units')
             except Exception:
                 pass
 
-    def _zoom_canvas(self, factor: float):
-        """Zoom the displayed image by adjusting display_scale and updating the display.
-        Factor >1 to zoom in, <1 to zoom out.
-        """
+    def _on_editor_mousewheel(self, event):
         try:
-            old_scale = getattr(self, 'display_scale', 1.0)
-            new_scale = max(0.05, min(5.0, old_scale * factor))
-            # Avoid unnecessary work
-            if abs(new_scale - old_scale) < 1e-6:
-                return
-            self.display_scale = new_scale
-            # update the canvas image based on new scale
-            self._update_display_image()
+            delta = int(event.delta / 120)
+            self.editor_canvas.yview_scroll(-delta, "units")
         except Exception:
             pass
 
-    def _remove_metadata(self):
-        pil = getattr(self, 'original_image', None)
-        if pil is None:
-            return
-        data = list(pil.getdata())
-        clean = Image.new(pil.mode, pil.size)
-        clean.putdata(data)
-        self.original_image = clean
-        self._update_display_image()
-
-    def darkMode(self):
-        # Robust handler: support CTkSwitch (self.dark_switch) or BooleanVar (self.darkmode)
-        try:
-            # Save current geometry so we can restore it after appearance changes
-            try:
-                _saved_geo = self.geometry()
-            except Exception:
-                _saved_geo = None
-            val = None
-            # Priority: CTkSwitch from toolbar
-            if hasattr(self, 'dark_switch') and self.dark_switch is not None:
-                try:
-                    val = self.dark_switch.get()
-                except Exception:
-                    # CTkSwitch may not expose get(); infer from appearance
-                    try:
-                        val = 1 if customtkinter.get_appearance_mode() == 'Dark' else 0
-                    except Exception:
-                        val = None
-            # Fallback: BooleanVar (native menu fallback)
-            if val is None and hasattr(self, 'darkmode'):
-                try:
-                    val = self.darkmode.get()
-                except Exception:
-                    val = None
-
-            # If still unknown, toggle current appearance
-            if val is None:
-                current = None
-                try:
-                    current = customtkinter.get_appearance_mode()
-                except Exception:
-                    pass
-                if current == 'Dark':
-                    customtkinter.set_appearance_mode('Light')
-                    val = 0
-                else:
-                    customtkinter.set_appearance_mode('Dark')
-                    val = 1
-            else:
-                # Apply based on val
-                if val:
-                    customtkinter.set_appearance_mode('Dark')
-                else:
-                    customtkinter.set_appearance_mode('Light')
-
-            # Update non-CTk widgets and header color based on resulting appearance
-            if customtkinter.get_appearance_mode() == 'Dark':
-                self.config(bg=self.theme_colors.get('dark_bg', '#1B1B1E'))
-                if hasattr(self, 'canvas') and self.canvas:
-                    self.canvas.config(bg=self.theme_colors.get('dark_bg', '#1B1B1E'))
-                try:
-                    self.header_label.configure(fg_color=(self.welcome_colors[1]))
-                except Exception:
-                    pass
-            else:
-                self.config(bg=self.theme_colors.get('light_bg', '#EAE1DF'))
-                if hasattr(self, 'canvas') and self.canvas:
-                    self.canvas.config(bg=self.theme_colors.get('light_bg', '#EAE1DF'))
-                try:
-                    self.header_label.configure(fg_color=(self.welcome_colors[0]))
-                except Exception:
-                    pass
-
-            # Sync widget states so UI reflects mode
-            if hasattr(self, 'dark_switch'):
-                try:
-                    if customtkinter.get_appearance_mode() == 'Dark':
-                        self.dark_switch.select()
-                    else:
-                        self.dark_switch.deselect()
-                except Exception:
-                    pass
-            if hasattr(self, 'darkmode'):
-                try:
-                    self.darkmode.set(1 if customtkinter.get_appearance_mode() == 'Dark' else 0)
-                except Exception:
-                    pass
-            # Restore previous geometry (prevent theme toggle from recentring/resizing the window)
-            try:
-                if _saved_geo:
-                    # reapply saved geometry
-                    self.geometry(_saved_geo)
-            except Exception:
-                pass
-        except Exception as e:
-            messagebox.showerror('Error', f"An error occurred while toggling dark mode:\n{e}")
-
     def apply_initial_appearance(self):
-        """Apply appearance colors to non-CTk widgets and header at startup so the UI matches the current mode."""
         try:
             mode = None
             try:
@@ -703,29 +422,23 @@ class ImageRedactorApp(customtkinter.CTk):
                 mode = 'Light'
 
             if mode == 'Dark':
-                self.config(bg=self.theme_colors.get('dark_bg', '#1B1B1E'))
+                self.config(bg='#1B1B1E')  # dark background
                 if hasattr(self, 'canvas') and self.canvas:
-                    self.canvas.config(bg=self.theme_colors.get('dark_bg', '#1B1B1E'))
-                try:
-                    self.header_label.configure(fg_color=(self.welcome_colors[1]))
-                except Exception:
-                    pass
+                    self.canvas.config(bg='#1B1B1E')
             else:
-                self.config(bg=self.theme_colors.get('light_bg', '#EAE1DF'))
+                self.config(bg='#EAE1DF')  # light background
                 if hasattr(self, 'canvas') and self.canvas:
-                    self.canvas.config(bg=self.theme_colors.get('light_bg', '#EAE1DF'))
-                try:
-                    self.header_label.configure(fg_color=(self.welcome_colors[0]))
-                except Exception:
-                    pass
+                    self.canvas.config(bg='#EAE1DF')
         except Exception:
             pass
-if __name__ == "__main__":
-    # The try, finnally block is used to provide DPI awareness on Windows
-    try:
-        from ctypes import windll
-        windll.shcore.SetProcessDpiAwareness(1)
 
-    finally:
-        app = ImageRedactorApp()
-        app.mainloop()
+    def toggle_dark_mode(self):
+        current = customtkinter.get_appearance_mode()
+        new_mode = 'Light' if current == 'Dark' else 'Dark'
+        customtkinter.set_appearance_mode(new_mode)
+        # Reflect any UI updates needed on mode change (e.g., editor redraw)
+        self.show_editor_panel()
+
+if __name__ == "__main__":
+    app = ImageRedactorApp()
+    app.mainloop()
