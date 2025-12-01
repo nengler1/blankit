@@ -4,6 +4,8 @@ import numpy as np
 from PIL import Image
 import face_recognition
 
+MODEL_TYPE = 'hog'  # or 'cnn' for GPU acceleration
+
 def faces_boxes(image_path):
     print("Looking for faces in:", image_path)
     
@@ -62,16 +64,21 @@ def blur_faces(image_cv, face_coords, blur_strength=50):
         image_cv[top:bottom, left:right] = blurred_face
     return image_cv
 
-MODEL_TYPE = 'hog'  # or 'cnn' for GPU acceleration
+def main():
+    IMG_PATH = os.path.join(os.getcwd(), "images", "2.jpg")
 
-IMG_PATH = os.getcwd() + "\\images\\group_test.jpg"
+    faces_img, face_coords = faces_boxes(IMG_PATH)
+    output_image, plate_coords = plates_boxes(faces_img)
 
-faces_img, face_coords = faces_boxes(IMG_PATH)
-output_image, plate_coords = plates_boxes(faces_img)
+    output_image = blur_faces(output_image, face_coords, 200)
 
-output_image = blur_faces(output_image, face_coords, 200)
+    resized = resize_image(output_image, 800)
 
-resized = resize_image(output_image, 800)
-cv2.imshow("Detections", resized)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    # Save the output image
+    output_path = os.path.join(os.getcwd(), "output", "result.jpg")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    cv2.imwrite(output_path, resized)
+    print(f"Result saved to: {output_path}")
+
+if __name__ == "__main__": # If this program is run directly
+    main()
