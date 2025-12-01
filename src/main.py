@@ -4,7 +4,11 @@ import numpy as np
 from PIL import Image
 import face_recognition
 
+MODEL_TYPE = 'hog'  # or 'cnn' for GPU acceleration
+
 def faces_boxes(image_path):
+    print("Looking for faces in:", image_path)
+    
     image = face_recognition.load_image_file(image_path)
 
     # Detect face locations
@@ -24,6 +28,8 @@ def faces_boxes(image_path):
     return image_cv, boxes
 
 def plates_boxes(image_cv):
+    print("Looking for license plates")
+
     gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
 
     # Load pretrained OpenCV cascade for license plate detection
@@ -32,7 +38,7 @@ def plates_boxes(image_cv):
     # Detect license plates
     plates = plate_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30,30))
 
-    print("Found", len(plates), "face(s)")
+    print("Found", len(plates), "plate(s)")
 
     # Using coords, draw boxes around plates
     boxes = []
@@ -49,14 +55,30 @@ def resize_image(image, width):
     resized_image = cv2.resize(image, (width, new_height))
     return resized_image
 
-MODEL_TYPE = 'hog'  # or 'cnn' for GPU acceleration
+def blur_faces(image_cv, face_coords, blur_strength=50):
+    for (top_left, bottom_right) in face_coords:
+        (left, top) = top_left
+        (right, bottom) = bottom_right
+        face_region = image_cv[top:bottom, left:right]
+        blurred_face = cv2.blur(face_region, (blur_strength, blur_strength))
+        image_cv[top:bottom, left:right] = blurred_face
+    return image_cv
 
-IMG_PATH = os.getcwd() + "/images/2.jpg"
+def main():
+    IMG_PATH = os.path.join(os.getcwd(), "images", "2.jpg")
 
-faces_img, face_coords = faces_boxes(IMG_PATH)
-output_image, plate_coords = plates_boxes(faces_img)
+    faces_img, face_coords = faces_boxes(IMG_PATH)
+    output_image, plate_coords = plates_boxes(faces_img)
 
-resized = resize_image(output_image, 800)
-cv2.imshow("Detections", resized)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    output_image = blur_faces(output_image, face_coords, 200)
+
+    resized = resize_image(output_image, 800)
+
+    # Save the output image
+    output_path = os.path.join(os.getcwd(), "output", "result.jpg")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    cv2.imwrite(output_path, resized)
+    print(f"Result saved to: {output_path}")
+
+if __name__ == "__main__": # If this program is run directly
+    main()
