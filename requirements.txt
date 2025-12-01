@@ -1,5 +1,4 @@
-#precomp_whl\dlib-19.24.99-cp312-cp312-win_amd64.whl
-
+precomp_whl\dlib-19.24.99-cp312-cp312-win_amd64.whl
 click==8.3.0
 colorama==0.4.6
 customtkinter==5.2.2
