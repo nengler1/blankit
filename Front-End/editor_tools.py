@@ -231,7 +231,7 @@ class EditorTools:
 
             return  # done for select mode
 
-        # -------- DRAW MODE (existing behavior) --------
+            # -------- DRAW MODE (existing behavior) --------
         if self._creating:
             self._creating = False
             canvas.delete(self._temp_rect)
@@ -246,7 +246,40 @@ class EditorTools:
                 return
 
             scale = getattr(self.app, "display_scale", 1.0) or 1.0
-            box = (x0 / scale, y0 / scale, x1 / scale, y1 / scale)
+
+            # convert to image coords first
+            ix0, iy0 = x0 / scale, y0 / scale
+            ix1, iy1 = x1 / scale, y1 / scale
+
+            # If the current shape is circle, normalize to a square
+            shape = "rectangle"
+            if hasattr(self.app, "shape_var"):
+                shape = self.app.shape_var.get()
+
+            if shape == "circle":
+                # make a square that fits inside the drawn box
+                w = ix1 - ix0
+                h = iy1 - iy0
+                side = min(abs(w), abs(h))
+
+                # keep top-left anchored and grow down/right
+                if w >= 0:
+                    sx0 = ix0
+                    sx1 = ix0 + side
+                else:
+                    sx0 = ix0 - side
+                    sx1 = ix0
+
+                if h >= 0:
+                    sy0 = iy0
+                    sy1 = iy0 + side
+                else:
+                    sy0 = iy0 - side
+                    sy1 = iy0
+
+                box = (sx0, sy0, sx1, sy1)
+            else:
+                box = (ix0, iy0, ix1, iy1)
 
             new_region = self._create_layer(box)
             self.layer_manager.add_layer(new_region)
@@ -264,6 +297,7 @@ class EditorTools:
             self._resize_handle = None
             self._drag_start_pos = None
             self._orig_coords = None
+
 
 
     def _get_handle_at_pos(self, canvas, x, y):
