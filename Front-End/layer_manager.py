@@ -12,7 +12,14 @@ class Layer:
         img = base_image.copy().convert("RGBA")
         x1, y1, x2, y2 = self.coords
         pad = self.size
-        box = (max(0, x1 - pad), max(0, y1 - pad), min(x2 + pad, img.width), min(y2 + pad, img.height))
+
+        # Compute box and image coords and cast to int
+        left   = int(max(0, x1 - pad))
+        top    = int(max(0, y1 - pad))
+        right  = int(min(x2 + pad, img.width))
+        bottom = int(min(y2 + pad, img.height))
+
+        box = (left, top, right, bottom)        
         region = img.crop(box)
 
         if self.method == 'blur':

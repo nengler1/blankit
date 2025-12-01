@@ -1,15 +1,19 @@
 import tkinter as tk
 from layer_manager import Layer
 
-HANDLE_SIZE = 8
+HANDLE_SIZE = 10
 HANDLE_TAG = "resize_handle"
 REGION_TAG = "region_overlay"
+MOVE_HANDLE_TAG = "move_handle"
 
 class EditorTools:
     def __init__(self, layer_manager, app):
         self.layer_manager = layer_manager
         self.app = app
         self.selected_region = None
+        self.selected_region = None         
+        self.selected_regions = []
+        self._mode = "draw" # can be changed to "edit" as needed
         self._dragging = False
         self._resizing = False
         self._resize_handle = None
@@ -22,49 +26,126 @@ class EditorTools:
 
     def clear_selection(self):
         self.selected_region = None
-
-    def select_region(self, index):
-        """Called from window when user selects a region in the list."""
-        if 0 <= index < len(self.layer_manager.layers):
-            self.selected_region = index
-        else:
-            self.selected_region = None
-
-        # Redraw overlays on the app's canvas
+        self.selected_regions = []
         if hasattr(self.app, "canvas"):
             self._redraw(self.app.canvas)
+
+
+    def select_region(self, index):
+        if 0 <= index < len(self.layer_manager.layers):
+            self.selected_region = index
+            self.selected_regions = [index]
+        else:
+            self.selected_region = None
+            self.selected_regions = []
+
+        if hasattr(self.app, "canvas"):
+            self._redraw(self.app.canvas)
+        if hasattr(self.app, "_refresh_region_list"):
+            self.app._refresh_region_list()
+
+
+            # Redraw overlays on the app's canvas
+            if hasattr(self.app, "canvas"):
+                self._redraw(self.app.canvas)
+
+    def set_mode(self, mode: str):
+        """Set interaction mode: 'select' or 'draw'."""
+        if mode in ("select", "draw"):
+            self._mode = mode
 
 
     def on_mouse_down(self, event):
         canvas = event.widget
         x, y = event.x, event.y
 
+        # ---------- COMMON: check resize handles first ----------
         handle_id, handle_dir = self._get_handle_at_pos(canvas, x, y)
         if handle_id:
+            # Start resizing the currently selected region
             self._resizing = True
             self._resize_handle = handle_dir
             self._drag_start_pos = (x, y)
             if self.selected_region is not None:
-                self._orig_coords = list(self.layer_manager.layers[self.selected_region].coords)
+                self._orig_coords = list(
+                    self.layer_manager.layers[self.selected_region].coords
+                )
             return
 
+        # ---------- DRAW MODE ----------
+        if self._mode == "draw":
+            # If clicked inside an existing region, drag that single region
+            idx = self._get_region_at_pos(x, y)
+            if idx is not None:
+                self.selected_region = idx
+                self.selected_regions = [idx]
+                self._dragging = True
+                self._drag_start_pos = (x, y)
+                self._orig_coords = list(self.layer_manager.layers[idx].coords)
+                self._redraw(canvas)
+                return
+
+            # Otherwise start creating a new region
+            self._creating = True
+            self._creation_start = (x, y)
+            self._temp_rect = canvas.create_rectangle(x, y, x, y, outline="red")
+            return
+
+        # ---------- SELECT MODE ----------
+        # 1) Click inside an existing region: start dragging that selection/group
         idx = self._get_region_at_pos(x, y)
         if idx is not None:
-            self.selected_region = idx
+            if idx not in self.selected_regions:
+                self.selected_regions = [idx]
+                self.selected_region = idx
+
             self._dragging = True
             self._drag_start_pos = (x, y)
-            self._orig_coords = list(self.layer_manager.layers[idx].coords)
+            self._orig_coords = {
+                i: list(self.layer_manager.layers[i].coords)
+                for i in self.selected_regions
+            }
+
             self._redraw(canvas)
+            if hasattr(self.app, "_refresh_region_list"):
+                self.app._refresh_region_list()
             return
 
-        # Start creating new region
+        # 2) No region and no handle: start box-select
         self._creating = True
         self._creation_start = (x, y)
-        self._temp_rect = canvas.create_rectangle(x, y, x, y, outline='red')
+        self._temp_rect = canvas.create_rectangle(
+            x, y, x, y,
+            outline="yellow",
+            dash=(3, 3),
+        )
+
 
     def on_mouse_move(self, event):
         canvas = event.widget
         x, y = event.x, event.y
+
+        if self._mode == "select":
+            # Drag selection box
+            if self._creating and self._temp_rect is not None:
+                x0, y0 = self._creation_start
+                canvas.coords(self._temp_rect, x0, y0, x, y)
+
+            # Move selected region(s)
+            elif self._dragging and self.selected_regions:
+                dx = x - self._drag_start_pos[0]
+                dy = y - self._drag_start_pos[1]
+
+                for i in self.selected_regions:
+                    if i in self._orig_coords:
+                        x1, y1, x2, y2 = self._orig_coords[i]
+                        self.layer_manager.layers[i].coords = (
+                            x1 + dx, y1 + dy, x2 + dx, y2 + dy
+                        )
+
+                self._redraw(canvas)
+
+            return
 
         if self._creating:
             x0, y0 = self._creation_start
@@ -102,27 +183,79 @@ class EditorTools:
     def on_mouse_up(self, event):
         canvas = event.widget
 
+        # -------- SELECT MODE --------
+        if self._mode == "select":
+            # Finish box-select or end drag
+            if self._creating and self._temp_rect is not None:
+                # End box selection
+                canvas.delete(self._temp_rect)
+                self._temp_rect = None
+                self._creating = False
+
+                x0, y0 = self._creation_start
+                x1, y1 = event.x, event.y
+                x0, x1 = sorted([x0, x1])
+                y0, y1 = sorted([y0, y1])
+
+                # If the box is tiny, treat as no selection
+                if abs(x1 - x0) < 5 or abs(y1 - y0) < 5:
+                    return
+
+                # Multi-select: find regions whose canvas-space boxes intersect
+                hits = []
+                scale = getattr(self.app, "display_scale", 1.0) or 1.0
+                for i, layer in enumerate(self.layer_manager.layers):
+                    lx1, ly1, lx2, ly2 = layer.coords
+                    cx1, cy1 = lx1 * scale, ly1 * scale
+                    cx2, cy2 = lx2 * scale, ly2 * scale
+                    # simple AABB intersection test
+                    if not (cx2 < x0 or cx1 > x1 or cy2 < y0 or cy1 > y1):
+                        hits.append(i)
+
+                if hits:
+                    self.selected_regions = hits
+                    self.selected_region = hits[0]
+                    self._redraw(canvas)
+                    if hasattr(self.app, "_refresh_region_list"):
+                        self.app._refresh_region_list()
+
+
+            else:
+                # Finish drag / resize in select mode
+                if self._dragging or self._resizing:
+                    self._dragging = False
+                    self._resizing = False
+                    self._resize_handle = None
+                    self._drag_start_pos = None
+                    self._orig_coords = None
+
+            return  # done for select mode
+
+        # -------- DRAW MODE (existing behavior) --------
         if self._creating:
             self._creating = False
             canvas.delete(self._temp_rect)
             self._temp_rect = None
+
             x0, y0 = self._creation_start
             x1, y1 = event.x, event.y
             x0, x1 = sorted([x0, x1])
             y0, y1 = sorted([y0, y1])
+
             if abs(x1 - x0) < 5 or abs(y1 - y0) < 5:
                 return
+
             scale = getattr(self.app, "display_scale", 1.0) or 1.0
             box = (x0 / scale, y0 / scale, x1 / scale, y1 / scale)
-            # Replace below with code to create and add Layer object properly
+
             new_region = self._create_layer(box)
             self.layer_manager.add_layer(new_region)
             self.selected_region = len(self.layer_manager.layers) - 1
             self._redraw(canvas)
-            
+
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
-                
+
             return
 
         if self._dragging or self._resizing:
@@ -131,6 +264,7 @@ class EditorTools:
             self._resize_handle = None
             self._drag_start_pos = None
             self._orig_coords = None
+
 
     def _get_handle_at_pos(self, canvas, x, y):
         ids = canvas.find_overlapping(x, y, x, y)
@@ -175,6 +309,16 @@ class EditorTools:
             )
             self._handles[handle_id] = direction
 
+        #Move handle
+        cx = (x1 + x2) // 2
+        top_y = y1 - 15  # above the top edge
+
+        self._move_handle_id = canvas.create_rectangle(
+            cx - HANDLE_SIZE, top_y - HANDLE_SIZE // 2,
+            cx + HANDLE_SIZE, top_y + HANDLE_SIZE // 2,
+            fill='orange', outline='black', tags=MOVE_HANDLE_TAG,
+        )
+
     def _create_layer(self, box):
         # Default fallbacks if UI not yet available
         shape = 'rectangle'
@@ -197,6 +341,7 @@ class EditorTools:
         """Redraw all region overlays on the given canvas."""
         canvas.delete(REGION_TAG)
         canvas.delete(HANDLE_TAG)
+        canvas.delete(MOVE_HANDLE_TAG)
 
         scale = getattr(self.app, "display_scale", 1.0) or 1.0
 
@@ -206,18 +351,26 @@ class EditorTools:
             cx1, cy1 = x1 * scale, y1 * scale
             cx2, cy2 = x2 * scale, y2 * scale
 
+            # Style: different color for selected regions
+            if idx in getattr(self, "selected_regions", []):
+                outline_color = "cyan"     # selected
+                width = 3
+            else:
+                outline_color = "red"      # normal
+                width = 2
+
             if layer.shape in ("circle", "oval"):
                 canvas.create_oval(
                     cx1, cy1, cx2, cy2,
-                    outline="red",
-                    width=2,
+                    outline=outline_color,
+                    width=width,
                     tags=REGION_TAG,
                 )
             else:
                 canvas.create_rectangle(
                     cx1, cy1, cx2, cy2,
-                    outline="red",
-                    width=2,
+                    outline=outline_color,
+                    width=width,
                     tags=REGION_TAG,
                 )
 
@@ -226,6 +379,7 @@ class EditorTools:
             and 0 <= self.selected_region < len(self.layer_manager.layers)
         ):
             self._draw_resize_handles(canvas, self.layer_manager.layers[self.selected_region])
+
 
     def copy_region(self, index):
         """Duplicate a region and add it as a new layer."""

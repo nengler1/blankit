@@ -5,6 +5,7 @@ import customtkinter
 from layer_manager import LayerManager
 from editor_tools import EditorTools
 
+
 class ImageRedactorApp(customtkinter.CTk):
     def __init__(self):
         super().__init__()
@@ -17,6 +18,9 @@ class ImageRedactorApp(customtkinter.CTk):
         self.layer_manager = LayerManager()
         self.editor_tools = EditorTools(self.layer_manager, self)
         self.selected_layer = None
+        self._handles = {}
+        self._move_handle_id = None
+        self._moving_group = False
         self.image = None
         self.original_image = None
         self.display_image = None
@@ -145,7 +149,28 @@ class ImageRedactorApp(customtkinter.CTk):
         def make_radiobutton(text, var, val):
             return customtkinter.CTkRadioButton(self.editor_inner, text=text, variable=var, value=val, text_color=text_color)
 
-        # Build UI controls with explicit colors
+        #Selector for selection or drawing mode
+        self.edit_mode_var = tk.StringVar(value="draw")  # default to draw
+
+        mode_frame = customtkinter.CTkFrame(self.editor_inner, fg_color="transparent")
+        mode_frame.pack(fill="x", padx=8, pady=(8, 4))
+
+        mode_label = customtkinter.CTkLabel(
+            mode_frame,
+            text="Mode:",
+            text_color=text_color
+        )
+        mode_label.pack(side="left", padx=(0, 8))
+
+        self.mode_segmented = customtkinter.CTkSegmentedButton(
+            mode_frame,
+            values=["select", "draw"],
+            command=self._on_mode_change
+        )
+        self.mode_segmented.pack(side="left", fill="x", expand=True)
+        self.mode_segmented.set("draw")
+
+        # Build UI controls
         make_label('Edit Regions').pack(pady=(8,4))
 
         make_label('Redaction method:').pack(anchor='w', padx=8)
@@ -199,14 +224,30 @@ class ImageRedactorApp(customtkinter.CTk):
 
             # Header line: index + summary
             summary = f"{idx+1}: {layer.shape} - {layer.method}"
+
+            # Determine if this index is selected
+            is_selected = (
+                hasattr(self.editor_tools, "selected_regions")
+                and idx in self.editor_tools.selected_regions
+            )
+
+            if is_selected:
+                row_fg = "#667761"   # highlighted background
+                row_text = "#EAE1DF" # light text
+            else:
+                row_fg = "#545E56"
+                row_text = "#1B1B1E"
+
             header_btn = customtkinter.CTkButton(
                 row_frame,
                 text=summary,
-                fg_color="#545E56",
+                fg_color=row_fg,
                 hover_color="#667761",
+                text_color=row_text,
                 command=lambda i=idx: self.editor_tools.select_region(i),
             )
             header_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
 
             # Toggle button to show/hide details
             toggle_btn = customtkinter.CTkButton(
@@ -279,6 +320,13 @@ class ImageRedactorApp(customtkinter.CTk):
                     frame.pack(fill="x", padx=12, pady=(0, 4))
 
             toggle_btn.configure(command=toggle_details)
+
+    def _on_mode_change(self, value: str):
+        """Update editor tools mode when segmented button changes."""
+        if hasattr(self, "edit_mode_var"):
+            self.edit_mode_var.set(value)
+        if hasattr(self, "editor_tools"):
+            self.editor_tools.set_mode(value)
 
 
     def _on_region_select(self, event):
