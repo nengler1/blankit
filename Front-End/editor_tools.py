@@ -5,6 +5,8 @@ HANDLE_SIZE = 10
 HANDLE_TAG = "resize_handle"
 REGION_TAG = "region_overlay"
 MOVE_HANDLE_TAG = "move_handle"
+OUTLINE_TAG = "selection_outline"
+
 
 class EditorTools:
     def __init__(self, layer_manager, app):
@@ -28,6 +30,8 @@ class EditorTools:
         self.selected_region = None
         self.selected_regions = []
         self.notify_layer_change()
+        if hasattr(self.app, "canvas"):
+            self.app.canvas.delete(OUTLINE_TAG)
 
 
     def select_region(self, index):
@@ -37,6 +41,8 @@ class EditorTools:
         else:
             self.selected_region = None
             self.selected_regions = []
+
+        self.notify_layer_change()
 
         if hasattr(self.app, "canvas"):
             self.notify_layer_change()
@@ -306,13 +312,21 @@ class EditorTools:
                 return id_, self._handles[id_]
         return None, None
 
-    def _get_region_at_pos(self, x, y):
-        # Return first region containing point (x,y) (using layer_manager)
+    def _get_region_at_pos(self, canvas_x, canvas_y):
+        """Return first region containing the canvas position (canvas_x, canvas_y)."""
+        scale = getattr(self.app, "display_scale", 1.0) or 1.0
+        
+        # Convert canvas coordinates to image coordinates
+        image_x = canvas_x / scale
+        image_y = canvas_y / scale
+        
+        # Check which region contains this image position
         for i, layer in enumerate(self.layer_manager.layers):
             x1, y1, x2, y2 = layer.coords
-            if x1 <= x <= x2 and y1 <= y <= y2:
+            if x1 <= image_x <= x2 and y1 <= image_y <= y2:
                 return i
         return None
+
 
     def _draw_resize_handles(self, canvas, region):
         if region is None:
@@ -413,6 +427,39 @@ class EditorTools:
         ):
             self._draw_resize_handles(canvas, self.layer_manager.layers[self.selected_region])
 
+    def draw_selection_outline(self):
+        """Draw an outline around the currently selected region on the canvas."""
+        if not hasattr(self.app, "canvas") or self.app.canvas is None:
+            return
+
+        canvas = self.app.canvas
+        canvas.delete(OUTLINE_TAG)
+
+        if self.selected_region is None or self.selected_region >= len(self.layer_manager.layers):
+            return
+
+        scale = getattr(self.app, "display_scale", 1.0) or 1.0
+        layer = self.layer_manager.layers[self.selected_region]
+        x1, y1, x2, y2 = layer.coords
+        cx1, cy1 = x1 * scale, y1 * scale
+        cx2, cy2 = x2 * scale, y2 * scale
+
+        # Draw only an outline, no fill, above the live image
+        if layer.shape in ("circle", "oval"):
+            canvas.create_oval(
+                cx1, cy1, cx2, cy2,
+                outline="cyan",
+                width=3,
+                tags=OUTLINE_TAG,
+            )
+        else:
+            canvas.create_rectangle(
+                cx1, cy1, cx2, cy2,
+                outline="cyan",
+                width=3,
+                tags=OUTLINE_TAG,
+            )
+
 
     def copy_region(self, index):
         """Duplicate a region and add it as a new layer."""
@@ -465,6 +512,7 @@ class EditorTools:
         """Call this after any layer modification to update live preview."""
         if hasattr(self.app, "_on_layer_change"):
             self.app._on_layer_change()
+        self.draw_selection_outline()
 
 
     def circle_region(self):
