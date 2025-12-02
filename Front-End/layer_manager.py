@@ -27,7 +27,7 @@ class Layer:
         elif self.method == 'pixelate':
             small = region.resize((max(1, region.width // max(1, self.intensity // 2)),
                                    max(1, region.height // max(1, self.intensity // 2))),
-                                   Image.NEAREST)
+                                    Image.NEAREST)
             region = small.resize(region.size, Image.NEAREST)
         elif self.method == 'redact':
             region = Image.new("RGBA", region.size, (0, 0, 0, 255))
@@ -60,3 +60,32 @@ class LayerManager:
         for layer in self.layers:
             img = layer.apply(img)
         return img
+    
+    def create_preview(self, base_image, display_scale=1.0):
+        """
+        Create a scaled composite image applying all layers on scaled base image.
+        """
+        # Scale the base image to preview size
+        preview_size = (
+            int(base_image.width * display_scale),
+            int(base_image.height * display_scale)
+        )
+        base_preview = base_image.resize(preview_size, Image.Resampling.LANCZOS).copy().convert("RGBA")
+
+        img = base_preview
+
+        for layer in self.layers:
+            # Adjust layer coords to preview scale
+            scaled_coords = tuple(c * display_scale for c in layer.coords)
+            # Create a copy of layer with scaled coords to avoid modifying original
+            scaled_layer = Layer(
+                shape=layer.shape,
+                coords=scaled_coords,
+                method=layer.method,
+                intensity=layer.intensity,
+                size=layer.size
+            )
+            img = scaled_layer.apply(img)
+
+        return img
+

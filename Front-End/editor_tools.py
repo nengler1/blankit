@@ -28,7 +28,7 @@ class EditorTools:
         self.selected_region = None
         self.selected_regions = []
         if hasattr(self.app, "canvas"):
-            self._redraw(self.app.canvas)
+            self.notify_layer_change()
 
 
     def select_region(self, index):
@@ -40,14 +40,14 @@ class EditorTools:
             self.selected_regions = []
 
         if hasattr(self.app, "canvas"):
-            self._redraw(self.app.canvas)
+            self.notify_layer_change()
         if hasattr(self.app, "_refresh_region_list"):
             self.app._refresh_region_list()
 
 
             # Redraw overlays on the app's canvas
             if hasattr(self.app, "canvas"):
-                self._redraw(self.app.canvas)
+                self.notify_layer_change()
 
     def set_mode(self, mode: str):
         """Set interaction mode: 'select' or 'draw'."""
@@ -82,7 +82,7 @@ class EditorTools:
                 self._dragging = True
                 self._drag_start_pos = (x, y)
                 self._orig_coords = list(self.layer_manager.layers[idx].coords)
-                self._redraw(canvas)
+                self.notify_layer_change()
                 return
 
             # Otherwise start creating a new region
@@ -106,7 +106,7 @@ class EditorTools:
                 for i in self.selected_regions
             }
 
-            self._redraw(canvas)
+            self.notify_layer_change()
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
             return
@@ -143,7 +143,7 @@ class EditorTools:
                             x1 + dx, y1 + dy, x2 + dx, y2 + dy
                         )
 
-                self._redraw(canvas)
+                self.notify_layer_change()
 
             return
 
@@ -159,7 +159,7 @@ class EditorTools:
             x1, y1, x2, y2 = self._orig_coords
             new_coords = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
             layer.coords = new_coords
-            self._redraw(canvas)
+            self.notify_layer_change()
 
         elif self._resizing and self.selected_region is not None:
             dx = x - self._drag_start_pos[0]
@@ -178,7 +178,7 @@ class EditorTools:
                 nx2 += dx
             
             layer.coords = (nx1, ny1, nx2, ny2)
-            self._redraw(canvas)
+            self.notify_layer_change()
 
     def on_mouse_up(self, event):
         canvas = event.widget
@@ -215,7 +215,7 @@ class EditorTools:
                 if hits:
                     self.selected_regions = hits
                     self.selected_region = hits[0]
-                    self._redraw(canvas)
+                    self.notify_layer_change()
                     if hasattr(self.app, "_refresh_region_list"):
                         self.app._refresh_region_list()
 
@@ -284,7 +284,7 @@ class EditorTools:
             new_region = self._create_layer(box)
             self.layer_manager.add_layer(new_region)
             self.selected_region = len(self.layer_manager.layers) - 1
-            self._redraw(canvas)
+            self.notify_layer_change()
 
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
@@ -431,7 +431,7 @@ class EditorTools:
             self.selected_region = len(self.layer_manager.layers) - 1
 
             if hasattr(self.app, "canvas"):
-                self._redraw(self.app.canvas)
+                self.notify_layer_change()
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
 
@@ -458,10 +458,14 @@ class EditorTools:
 
             # Redraw overlays and refresh list
             if hasattr(self.app, "canvas"):
-                self._redraw(self.app.canvas)
+                self.notify_layer_change()
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
 
+    def notify_layer_change(self):
+        """Call this after any layer modification to update live preview."""
+        if hasattr(self.app, "_on_layer_change"):
+            self.app._on_layer_change()
 
 
     def circle_region(self):

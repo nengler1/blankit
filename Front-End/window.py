@@ -26,6 +26,8 @@ class ImageRedactorApp(customtkinter.CTk):
         self.display_image = None
         self.display_scale = 1.0
         self.canvas_image_id = None
+        self.live_composite_image = None
+        self.live_tk_image = None
         self.create_toolbar()
         self.create_main_widgets()
         self.apply_initial_appearance()
@@ -189,10 +191,12 @@ class ImageRedactorApp(customtkinter.CTk):
 
         make_label('Intensity:').pack(anchor='w', padx=8, pady=(8,0))
         self.intensity_var = tk.IntVar(value=10)
+        self.intensity_var.trace_add('write', lambda *args: self._on_layer_change())
         customtkinter.CTkSlider(self.editor_inner, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
 
         make_label('Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
         self.size_var = tk.IntVar(value=0)
+        self.size_var.trace_add('write', lambda *args: self._on_layer_change())
         customtkinter.CTkSlider(self.editor_inner, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
 
         make_label('Regions:').pack(anchor='w', padx=8, pady=(8, 0))
@@ -353,7 +357,34 @@ class ImageRedactorApp(customtkinter.CTk):
         if hasattr(self, "region_container"):
             self._build_region_rows()
 
-        
+    
+    def update_live_preview(self):
+        """Create and display the live preview image on the canvas."""
+        if self.original_image is None:
+            return
+
+        scale = getattr(self, "display_scale", 1.0) or 1.0
+
+        # Create a preview composited image scaled to display size
+        preview_img = self.layer_manager.create_preview(self.original_image, scale)
+
+        # Keep a reference to prevent GC
+        self.live_composite_image = preview_img
+        self.live_tk_image = ImageTk.PhotoImage(preview_img)
+
+        # Update or create image on canvas
+        if hasattr(self, 'canvas_image_id') and self.canvas_image_id:
+            self.canvas.itemconfig(self.canvas_image_id, image=self.live_tk_image)
+        else:
+            self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.live_tk_image)
+
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_layer_change(self):
+        """Called when layers change to update live preview."""
+        self.update_live_preview()
+
+
     def save_image(self):
         if not self.original_image:
             messagebox.showwarning("No Image", "Please upload an image first.")
