@@ -4,6 +4,8 @@ from PIL import Image, ImageTk
 import customtkinter
 from layer_manager import LayerManager
 from editor_tools import EditorTools
+import os
+
 
 
 class ImageRedactorApp(customtkinter.CTk):
@@ -42,8 +44,21 @@ class ImageRedactorApp(customtkinter.CTk):
         btn_open.pack(side="left", padx=5, pady=5)
         btn_save = customtkinter.CTkButton(toolbar, text="Save", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.save_image)
         btn_save.pack(side="left", padx=5, pady=5)
+        
+        btn_ai = customtkinter.CTkButton(
+            toolbar, 
+            text="AI Redact", 
+            fg_color="#4A7C59", 
+            hover_color="#5A8C69", 
+            text_color=btn_text, 
+            command=self.run_ai_redaction
+        )
+        btn_ai.pack(side="left", padx=5, pady=5)
+
         btn_exit = customtkinter.CTkButton(toolbar, text="Exit", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.quit)
         btn_exit.pack(side="left", padx=5, pady=5)
+
+
         self.dark_mode_switch = customtkinter.CTkSwitch(toolbar, text="Dark Mode", command=self.toggle_dark_mode)
         self.dark_mode_switch.pack(side="right", padx=5, pady=5)
 
@@ -469,6 +484,73 @@ class ImageRedactorApp(customtkinter.CTk):
         customtkinter.set_appearance_mode(new_mode)
         # Reflect any UI updates needed on mode change (e.g., editor redraw)
         self.show_editor_panel()
+
+    def run_ai_redaction(self):
+        """Run AI detection and automatically add detected regions as layers."""
+        if self.original_image is None:
+            messagebox.showwarning("No Image", "Please upload an image first.")
+            return
+        
+        try:
+            from main import faces_boxes, plates_boxes  # Import backend functions
+            
+            # Save temp image path for AI processing
+            temp_path = "temp_ai_input.jpg"
+            self.original_image.save(temp_path)
+            
+            # Run face detection
+            print("Running face detection...")
+            faces_img_cv, face_coords = faces_boxes(temp_path)
+            
+            # Run plate detection on face-processed image
+            print("Running license plate detection...")
+            _, plate_coords = plates_boxes(faces_img_cv)
+            
+            # Combine all detected regions
+            all_regions = face_coords + plate_coords
+            
+            if not all_regions:
+                messagebox.showinfo("AI Detection", "No sensitive regions detected.")
+                return
+            
+            # Clear existing layers
+            self.layer_manager.clear_layers()
+            self.editor_tools.clear_selection()
+            
+            # Add each detected region as a Layer
+            default_method = self.method_var.get() if hasattr(self, 'method_var') else 'redact'
+            default_shape = self.shape_var.get() if hasattr(self, 'shape_var') else 'rectangle'
+            
+            for coord_pair in all_regions:
+                (left, top), (right, bottom) = coord_pair
+                # Convert to (x1,y1,x2,y2) format for Layer
+                coords = (left, top, right, bottom)
+                
+                new_layer = Layer(
+                    shape=default_shape,
+                    coords=coords,
+                    method=default_method,
+                    intensity=10,
+                    size=0
+                )
+                self.layer_manager.add_layer(new_layer)
+            
+            print(f"AI added {len(all_regions)} detected regions as editable layers")
+            messagebox.showinfo("AI Detection", f"Added {len(all_regions)} detected regions!")
+            
+            # Refresh UI and live preview
+            self.show_editor_panel()
+            self.update_live_preview()
+            
+        except ImportError:
+            messagebox.showerror("Missing Backend", "main.py not found or missing dependencies (face_recognition, opencv-python)")
+        except Exception as e:
+            messagebox.showerror("AI Error", f"AI detection failed: {str(e)}")
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
 
 if __name__ == "__main__":
     app = ImageRedactorApp()

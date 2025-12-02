@@ -27,8 +27,7 @@ class EditorTools:
     def clear_selection(self):
         self.selected_region = None
         self.selected_regions = []
-        if hasattr(self.app, "canvas"):
-            self.notify_layer_change()
+        self.notify_layer_change()
 
 
     def select_region(self, index):

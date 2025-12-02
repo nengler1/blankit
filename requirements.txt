@@ -1,4 +1,4 @@
-precomp_whl\dlib-19.24.99-cp312-cp312-win_amd64.whl
+# precomp_whl\dlib-19.24.99-cp312-cp312-win_amd64.whl
 click==8.3.0
 colorama==0.4.6
 customtkinter==5.2.2
@@ -29,3 +29,4 @@ tqdm==4.67.1
 typing_extensions==4.15.0
 urllib3==2.5.0
 pillow==11.3.0
+dlib # No version given, should automatically use the most compatible release
