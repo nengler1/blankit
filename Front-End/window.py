@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import customtkinter
 from layer_manager import LayerManager, Layer
 from editor_tools import EditorTools
+import functools
 import os
 
 
@@ -233,6 +234,8 @@ class ImageRedactorApp(customtkinter.CTk):
             child.destroy()
 
         scale = getattr(self, "display_scale", 1.0) or 1.0
+        shape_options = ['rectangle', 'circle', 'oval']
+        method_options = ['blur', 'redact', 'pixelate', 'none']
 
         for idx, layer in enumerate(self.layer_manager.layers):
             row_frame = customtkinter.CTkFrame(
@@ -251,8 +254,8 @@ class ImageRedactorApp(customtkinter.CTk):
             )
 
             if is_selected:
-                row_fg = "#667761"   # highlighted background
-                row_text = "#EAE1DF" # light text
+                row_fg = "#EBD494"   # highlighted background
+                row_text = "#1B1B1E" # light text
             else:
                 row_fg = "#545E56"
                 row_text = "#1B1B1E"
@@ -266,7 +269,6 @@ class ImageRedactorApp(customtkinter.CTk):
                 command=lambda i=idx: self.editor_tools.select_region(i),
             )
             header_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
 
             # Toggle button to show/hide details
             toggle_btn = customtkinter.CTkButton(
@@ -331,12 +333,34 @@ class ImageRedactorApp(customtkinter.CTk):
             )
             delete_btn.pack(side="left", padx=4)
 
-            # Toggle behavior
-            def toggle_details(frame=details):
-                if frame.winfo_ismapped():
-                    frame.pack_forget()
+            # Shape dropdown - FIXED
+            shape_combo = customtkinter.CTkComboBox(
+                details,
+                values=shape_options,
+                width=100,
+                state="readonly",
+                command=lambda val, i=idx: self._on_shape_change(int(i), val)
+            )
+            shape_combo.set(layer.shape)
+            shape_combo.pack(anchor="w", padx=8, pady=(4, 0))
+
+            # Method dropdown - FIXED  
+            method_combo = customtkinter.CTkComboBox(
+                details,
+                values=method_options,
+                width=100,
+                state="readonly",
+                command=lambda val, i=idx: self._on_method_change(int(i), val)
+            )
+            method_combo.set(layer.method)
+            method_combo.pack(anchor="w", padx=8, pady=(4, 8))
+
+            # Toggle behavior - FIXED (moved inside loop, proper scope)
+            def toggle_details():
+                if details.winfo_ismapped():
+                    details.pack_forget()
                 else:
-                    frame.pack(fill="x", padx=12, pady=(0, 4))
+                    details.pack(fill="x", padx=12, pady=(0, 4))
 
             toggle_btn.configure(command=toggle_details)
 
@@ -346,6 +370,64 @@ class ImageRedactorApp(customtkinter.CTk):
             self.edit_mode_var.set(value)
         if hasattr(self, "editor_tools"):
             self.editor_tools.set_mode(value)
+
+    def _on_shape_change(self, idx, new_shape):
+        """Delete and recreate layer with new shape."""
+        try:
+            idx = int(idx)  # Double safety
+            if 0 <= idx < len(self.layer_manager.layers):
+                layer = self.layer_manager.layers[idx]
+                coords = layer.coords
+                intensity = layer.intensity
+                size = layer.size
+                
+                # Delete old layer
+                del self.layer_manager.layers[idx]  # Direct list delete
+                self.editor_tools.clear_selection()
+                
+                # Create new layer
+                new_layer = Layer(
+                    shape=new_shape,
+                    coords=coords,
+                    method=layer.method,
+                    intensity=intensity,
+                    size=size
+                )
+                self.layer_manager.layers.append(new_layer)  # Direct append
+                
+                self.update_live_preview()
+                self._refresh_region_list()
+        except (ValueError, IndexError):
+            pass  # Silently ignore invalid indices
+
+    def _on_method_change(self, idx, new_method):
+        """Delete and recreate layer with new method."""
+        try:
+            idx = int(idx)
+            if 0 <= idx < len(self.layer_manager.layers):
+                layer = self.layer_manager.layers[idx]
+                coords = layer.coords
+                intensity = layer.intensity
+                size = layer.size
+                
+                # Delete old layer
+                del self.layer_manager.layers[idx]
+                self.editor_tools.clear_selection()
+                
+                # Create new layer
+                new_layer = Layer(
+                    shape=layer.shape,
+                    coords=coords,
+                    method=new_method,
+                    intensity=intensity,
+                    size=size
+                )
+                self.layer_manager.layers.append(new_layer)
+                
+                self.update_live_preview()
+                self._refresh_region_list()
+        except (ValueError, IndexError):
+            pass
 
 
     def _on_region_select(self, event):
