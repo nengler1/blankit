@@ -6,8 +6,22 @@ from layer_manager import LayerManager, Layer
 from editor_tools import EditorTools
 import functools
 import os
+import sys
+from pathlib import Path
 
+# Allow importing backend when running from source or a frozen build.
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    PROJECT_ROOT = Path(sys._MEIPASS)
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+@functools.lru_cache(maxsize=1)
+def _load_backend():
+    from src.main import faces_boxes, plates_boxes
+    return faces_boxes, plates_boxes
 
 class ImageRedactorApp(customtkinter.CTk):
     def __init__(self):
@@ -569,18 +583,13 @@ class ImageRedactorApp(customtkinter.CTk):
 
     def run_ai_redaction(self):
         """Run AI detection and automatically add detected regions as layers."""
-        import sys
-        import os
-
         temp_path = None
         if self.original_image is None:
             messagebox.showwarning("No Image", "Please upload an image first.")
             return
 
         try:
-            # Add 'src' folder to sys.path for import
-            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-            from main import faces_boxes, plates_boxes  # Import backend functions
+            faces_boxes, plates_boxes = _load_backend()
 
             # Save temp image path for AI processing
             temp_path = os.path.abspath("temp_ai_input.png")
