@@ -2,8 +2,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import customtkinter
-from layer_manager import LayerManager
+from layer_manager import LayerManager, Layer
 from editor_tools import EditorTools
+import functools
+import os
+
 
 
 class ImageRedactorApp(customtkinter.CTk):
@@ -26,6 +29,8 @@ class ImageRedactorApp(customtkinter.CTk):
         self.display_image = None
         self.display_scale = 1.0
         self.canvas_image_id = None
+        self.live_composite_image = None
+        self.live_tk_image = None
         self.create_toolbar()
         self.create_main_widgets()
         self.apply_initial_appearance()
@@ -40,8 +45,21 @@ class ImageRedactorApp(customtkinter.CTk):
         btn_open.pack(side="left", padx=5, pady=5)
         btn_save = customtkinter.CTkButton(toolbar, text="Save", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.save_image)
         btn_save.pack(side="left", padx=5, pady=5)
+        
+        btn_ai = customtkinter.CTkButton(
+            toolbar, 
+            text="AI Redact", 
+            fg_color="#4A7C59", 
+            hover_color="#5A8C69", 
+            text_color=btn_text, 
+            command=self.run_ai_redaction
+        )
+        btn_ai.pack(side="left", padx=5, pady=5)
+
         btn_exit = customtkinter.CTkButton(toolbar, text="Exit", fg_color=btn_fg, hover_color=btn_hover, text_color=btn_text, command=self.quit)
         btn_exit.pack(side="left", padx=5, pady=5)
+
+
         self.dark_mode_switch = customtkinter.CTkSwitch(toolbar, text="Dark Mode", command=self.toggle_dark_mode)
         self.dark_mode_switch.pack(side="right", padx=5, pady=5)
 
@@ -189,10 +207,12 @@ class ImageRedactorApp(customtkinter.CTk):
 
         make_label('Intensity:').pack(anchor='w', padx=8, pady=(8,0))
         self.intensity_var = tk.IntVar(value=10)
+        self.intensity_var.trace_add('write', lambda *args: self._on_layer_change())
         customtkinter.CTkSlider(self.editor_inner, from_=1, to=50, variable=self.intensity_var).pack(fill='x', padx=12)
 
         make_label('Size (px padding):').pack(anchor='w', padx=8, pady=(8,0))
         self.size_var = tk.IntVar(value=0)
+        self.size_var.trace_add('write', lambda *args: self._on_layer_change())
         customtkinter.CTkSlider(self.editor_inner, from_=0, to=200, variable=self.size_var).pack(fill='x', padx=12)
 
         make_label('Regions:').pack(anchor='w', padx=8, pady=(8, 0))
@@ -214,6 +234,8 @@ class ImageRedactorApp(customtkinter.CTk):
             child.destroy()
 
         scale = getattr(self, "display_scale", 1.0) or 1.0
+        shape_options = ['rectangle', 'circle', 'oval']
+        method_options = ['blur', 'redact', 'pixelate', 'none']
 
         for idx, layer in enumerate(self.layer_manager.layers):
             row_frame = customtkinter.CTkFrame(
@@ -232,8 +254,8 @@ class ImageRedactorApp(customtkinter.CTk):
             )
 
             if is_selected:
-                row_fg = "#667761"   # highlighted background
-                row_text = "#EAE1DF" # light text
+                row_fg = "#EBD494"   # highlighted background
+                row_text = "#1B1B1E" # light text
             else:
                 row_fg = "#545E56"
                 row_text = "#1B1B1E"
@@ -247,7 +269,6 @@ class ImageRedactorApp(customtkinter.CTk):
                 command=lambda i=idx: self.editor_tools.select_region(i),
             )
             header_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
 
             # Toggle button to show/hide details
             toggle_btn = customtkinter.CTkButton(
@@ -312,12 +333,34 @@ class ImageRedactorApp(customtkinter.CTk):
             )
             delete_btn.pack(side="left", padx=4)
 
-            # Toggle behavior
-            def toggle_details(frame=details):
-                if frame.winfo_ismapped():
-                    frame.pack_forget()
+            # Shape dropdown - FIXED
+            shape_combo = customtkinter.CTkComboBox(
+                details,
+                values=shape_options,
+                width=100,
+                state="readonly",
+                command=lambda val, i=idx: self._on_shape_change(int(i), val)
+            )
+            shape_combo.set(layer.shape)
+            shape_combo.pack(anchor="w", padx=8, pady=(4, 0))
+
+            # Method dropdown - FIXED  
+            method_combo = customtkinter.CTkComboBox(
+                details,
+                values=method_options,
+                width=100,
+                state="readonly",
+                command=lambda val, i=idx: self._on_method_change(int(i), val)
+            )
+            method_combo.set(layer.method)
+            method_combo.pack(anchor="w", padx=8, pady=(4, 8))
+
+            # Toggle behavior - FIXED (moved inside loop, proper scope)
+            def toggle_details():
+                if details.winfo_ismapped():
+                    details.pack_forget()
                 else:
-                    frame.pack(fill="x", padx=12, pady=(0, 4))
+                    details.pack(fill="x", padx=12, pady=(0, 4))
 
             toggle_btn.configure(command=toggle_details)
 
@@ -327,6 +370,64 @@ class ImageRedactorApp(customtkinter.CTk):
             self.edit_mode_var.set(value)
         if hasattr(self, "editor_tools"):
             self.editor_tools.set_mode(value)
+
+    def _on_shape_change(self, idx, new_shape):
+        """Delete and recreate layer with new shape."""
+        try:
+            idx = int(idx)  # Double safety
+            if 0 <= idx < len(self.layer_manager.layers):
+                layer = self.layer_manager.layers[idx]
+                coords = layer.coords
+                intensity = layer.intensity
+                size = layer.size
+                
+                # Delete old layer
+                del self.layer_manager.layers[idx]  # Direct list delete
+                self.editor_tools.clear_selection()
+                
+                # Create new layer
+                new_layer = Layer(
+                    shape=new_shape,
+                    coords=coords,
+                    method=layer.method,
+                    intensity=intensity,
+                    size=size
+                )
+                self.layer_manager.layers.append(new_layer)  # Direct append
+                
+                self.update_live_preview()
+                self._refresh_region_list()
+        except (ValueError, IndexError):
+            pass  # Silently ignore invalid indices
+
+    def _on_method_change(self, idx, new_method):
+        """Delete and recreate layer with new method."""
+        try:
+            idx = int(idx)
+            if 0 <= idx < len(self.layer_manager.layers):
+                layer = self.layer_manager.layers[idx]
+                coords = layer.coords
+                intensity = layer.intensity
+                size = layer.size
+                
+                # Delete old layer
+                del self.layer_manager.layers[idx]
+                self.editor_tools.clear_selection()
+                
+                # Create new layer
+                new_layer = Layer(
+                    shape=layer.shape,
+                    coords=coords,
+                    method=new_method,
+                    intensity=intensity,
+                    size=size
+                )
+                self.layer_manager.layers.append(new_layer)
+                
+                self.update_live_preview()
+                self._refresh_region_list()
+        except (ValueError, IndexError):
+            pass
 
 
     def _on_region_select(self, event):
@@ -353,7 +454,34 @@ class ImageRedactorApp(customtkinter.CTk):
         if hasattr(self, "region_container"):
             self._build_region_rows()
 
-        
+    
+    def update_live_preview(self):
+        """Create and display the live preview image on the canvas."""
+        if self.original_image is None:
+            return
+
+        scale = getattr(self, "display_scale", 1.0) or 1.0
+
+        # Create a preview composited image scaled to display size
+        preview_img = self.layer_manager.create_preview(self.original_image, scale)
+
+        # Keep a reference to prevent GC
+        self.live_composite_image = preview_img
+        self.live_tk_image = ImageTk.PhotoImage(preview_img)
+
+        # Update or create image on canvas
+        if hasattr(self, 'canvas_image_id') and self.canvas_image_id:
+            self.canvas.itemconfig(self.canvas_image_id, image=self.live_tk_image)
+        else:
+            self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.live_tk_image)
+
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_layer_change(self):
+        """Called when layers change to update live preview."""
+        self.update_live_preview()
+
+
     def save_image(self):
         if not self.original_image:
             messagebox.showwarning("No Image", "Please upload an image first.")
@@ -438,6 +566,80 @@ class ImageRedactorApp(customtkinter.CTk):
         customtkinter.set_appearance_mode(new_mode)
         # Reflect any UI updates needed on mode change (e.g., editor redraw)
         self.show_editor_panel()
+
+    def run_ai_redaction(self):
+        """Run AI detection and automatically add detected regions as layers."""
+        import sys
+        import os
+
+        temp_path = None
+        if self.original_image is None:
+            messagebox.showwarning("No Image", "Please upload an image first.")
+            return
+
+        try:
+            # Add 'src' folder to sys.path for import
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+            from main import faces_boxes, plates_boxes  # Import backend functions
+
+            # Save temp image path for AI processing
+            temp_path = os.path.abspath("temp_ai_input.png")
+            self.original_image.save(temp_path)
+
+            # Run face detection
+            print("Running face detection...")
+            faces_img_cv, face_coords = faces_boxes(temp_path)
+
+            # Run plate detection on face-processed image
+            print("Running license plate detection...")
+            _, plate_coords = plates_boxes(faces_img_cv)
+
+            # Combine all detected regions
+            all_regions = face_coords + plate_coords
+
+            if not all_regions:
+                messagebox.showinfo("AI Detection", "No sensitive regions detected.")
+                return
+
+            # Clear existing layers
+            self.layer_manager.clear_layers()
+            self.editor_tools.clear_selection()
+
+            # Add each detected region as a Layer
+            default_method = self.method_var.get() if hasattr(self, "method_var") else "redact"
+            default_shape = self.shape_var.get() if hasattr(self, "shape_var") else "rectangle"
+
+            for coord_pair in all_regions:
+                (left, top), (right, bottom) = coord_pair
+                # Convert to (x1, y1, x2, y2) format for Layer
+                coords = (left, top, right, bottom)
+
+                new_layer = Layer(
+                    shape=default_shape,
+                    coords=coords,
+                    method=default_method,
+                    intensity=10,
+                    size=0,
+                )
+                self.layer_manager.add_layer(new_layer)
+
+            print(f"AI added {len(all_regions)} detected regions as editable layers")
+            messagebox.showinfo("AI Detection", f"Added {len(all_regions)} detected regions!")
+
+            # Refresh UI and live preview
+            self.show_editor_panel()
+            self.update_live_preview()
+
+        except ImportError:
+            messagebox.showerror(
+                "Missing Backend", "main.py not found or missing dependencies (face_recognition, opencv-python)"
+            )
+        except Exception as e:
+            messagebox.showerror("AI Error", f"AI detection failed: {str(e)}")
+        finally:
+            # Cleanup temp file safely
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
 
 if __name__ == "__main__":
     app = ImageRedactorApp()

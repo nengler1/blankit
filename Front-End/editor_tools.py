@@ -5,6 +5,8 @@ HANDLE_SIZE = 10
 HANDLE_TAG = "resize_handle"
 REGION_TAG = "region_overlay"
 MOVE_HANDLE_TAG = "move_handle"
+OUTLINE_TAG = "selection_outline"
+
 
 class EditorTools:
     def __init__(self, layer_manager, app):
@@ -27,8 +29,9 @@ class EditorTools:
     def clear_selection(self):
         self.selected_region = None
         self.selected_regions = []
+        self.notify_layer_change()
         if hasattr(self.app, "canvas"):
-            self._redraw(self.app.canvas)
+            self.app.canvas.delete(OUTLINE_TAG)
 
 
     def select_region(self, index):
@@ -39,15 +42,17 @@ class EditorTools:
             self.selected_region = None
             self.selected_regions = []
 
+        self.notify_layer_change()
+
         if hasattr(self.app, "canvas"):
-            self._redraw(self.app.canvas)
+            self.notify_layer_change()
         if hasattr(self.app, "_refresh_region_list"):
             self.app._refresh_region_list()
 
 
             # Redraw overlays on the app's canvas
             if hasattr(self.app, "canvas"):
-                self._redraw(self.app.canvas)
+                self.notify_layer_change()
 
     def set_mode(self, mode: str):
         """Set interaction mode: 'select' or 'draw'."""
@@ -82,7 +87,7 @@ class EditorTools:
                 self._dragging = True
                 self._drag_start_pos = (x, y)
                 self._orig_coords = list(self.layer_manager.layers[idx].coords)
-                self._redraw(canvas)
+                self.notify_layer_change()
                 return
 
             # Otherwise start creating a new region
@@ -106,7 +111,7 @@ class EditorTools:
                 for i in self.selected_regions
             }
 
-            self._redraw(canvas)
+            self.notify_layer_change()
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
             return
@@ -143,7 +148,7 @@ class EditorTools:
                             x1 + dx, y1 + dy, x2 + dx, y2 + dy
                         )
 
-                self._redraw(canvas)
+                self.notify_layer_change()
 
             return
 
@@ -159,7 +164,7 @@ class EditorTools:
             x1, y1, x2, y2 = self._orig_coords
             new_coords = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
             layer.coords = new_coords
-            self._redraw(canvas)
+            self.notify_layer_change()
 
         elif self._resizing and self.selected_region is not None:
             dx = x - self._drag_start_pos[0]
@@ -178,7 +183,7 @@ class EditorTools:
                 nx2 += dx
             
             layer.coords = (nx1, ny1, nx2, ny2)
-            self._redraw(canvas)
+            self.notify_layer_change()
 
     def on_mouse_up(self, event):
         canvas = event.widget
@@ -215,7 +220,7 @@ class EditorTools:
                 if hits:
                     self.selected_regions = hits
                     self.selected_region = hits[0]
-                    self._redraw(canvas)
+                    self.notify_layer_change()
                     if hasattr(self.app, "_refresh_region_list"):
                         self.app._refresh_region_list()
 
@@ -231,7 +236,7 @@ class EditorTools:
 
             return  # done for select mode
 
-        # -------- DRAW MODE (existing behavior) --------
+            # -------- DRAW MODE (existing behavior) --------
         if self._creating:
             self._creating = False
             canvas.delete(self._temp_rect)
@@ -246,12 +251,45 @@ class EditorTools:
                 return
 
             scale = getattr(self.app, "display_scale", 1.0) or 1.0
-            box = (x0 / scale, y0 / scale, x1 / scale, y1 / scale)
+
+            # convert to image coords first
+            ix0, iy0 = x0 / scale, y0 / scale
+            ix1, iy1 = x1 / scale, y1 / scale
+
+            # If the current shape is circle, normalize to a square
+            shape = "rectangle"
+            if hasattr(self.app, "shape_var"):
+                shape = self.app.shape_var.get()
+
+            if shape == "circle":
+                # make a square that fits inside the drawn box
+                w = ix1 - ix0
+                h = iy1 - iy0
+                side = min(abs(w), abs(h))
+
+                # keep top-left anchored and grow down/right
+                if w >= 0:
+                    sx0 = ix0
+                    sx1 = ix0 + side
+                else:
+                    sx0 = ix0 - side
+                    sx1 = ix0
+
+                if h >= 0:
+                    sy0 = iy0
+                    sy1 = iy0 + side
+                else:
+                    sy0 = iy0 - side
+                    sy1 = iy0
+
+                box = (sx0, sy0, sx1, sy1)
+            else:
+                box = (ix0, iy0, ix1, iy1)
 
             new_region = self._create_layer(box)
             self.layer_manager.add_layer(new_region)
             self.selected_region = len(self.layer_manager.layers) - 1
-            self._redraw(canvas)
+            self.notify_layer_change()
 
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
@@ -266,6 +304,7 @@ class EditorTools:
             self._orig_coords = None
 
 
+
     def _get_handle_at_pos(self, canvas, x, y):
         ids = canvas.find_overlapping(x, y, x, y)
         for id_ in ids:
@@ -273,13 +312,21 @@ class EditorTools:
                 return id_, self._handles[id_]
         return None, None
 
-    def _get_region_at_pos(self, x, y):
-        # Return first region containing point (x,y) (using layer_manager)
+    def _get_region_at_pos(self, canvas_x, canvas_y):
+        """Return first region containing the canvas position (canvas_x, canvas_y)."""
+        scale = getattr(self.app, "display_scale", 1.0) or 1.0
+        
+        # Convert canvas coordinates to image coordinates
+        image_x = canvas_x / scale
+        image_y = canvas_y / scale
+        
+        # Check which region contains this image position
         for i, layer in enumerate(self.layer_manager.layers):
             x1, y1, x2, y2 = layer.coords
-            if x1 <= x <= x2 and y1 <= y <= y2:
+            if x1 <= image_x <= x2 and y1 <= image_y <= y2:
                 return i
         return None
+
 
     def _draw_resize_handles(self, canvas, region):
         if region is None:
@@ -380,6 +427,39 @@ class EditorTools:
         ):
             self._draw_resize_handles(canvas, self.layer_manager.layers[self.selected_region])
 
+    def draw_selection_outline(self):
+        """Draw an outline around the currently selected region on the canvas."""
+        if not hasattr(self.app, "canvas") or self.app.canvas is None:
+            return
+
+        canvas = self.app.canvas
+        canvas.delete(OUTLINE_TAG)
+
+        if self.selected_region is None or self.selected_region >= len(self.layer_manager.layers):
+            return
+
+        scale = getattr(self.app, "display_scale", 1.0) or 1.0
+        layer = self.layer_manager.layers[self.selected_region]
+        x1, y1, x2, y2 = layer.coords
+        cx1, cy1 = x1 * scale, y1 * scale
+        cx2, cy2 = x2 * scale, y2 * scale
+
+        # Draw only an outline, no fill, above the live image
+        if layer.shape in ("circle", "oval"):
+            canvas.create_oval(
+                cx1, cy1, cx2, cy2,
+                outline="cyan",
+                width=3,
+                tags=OUTLINE_TAG,
+            )
+        else:
+            canvas.create_rectangle(
+                cx1, cy1, cx2, cy2,
+                outline="cyan",
+                width=3,
+                tags=OUTLINE_TAG,
+            )
+
 
     def copy_region(self, index):
         """Duplicate a region and add it as a new layer."""
@@ -397,7 +477,7 @@ class EditorTools:
             self.selected_region = len(self.layer_manager.layers) - 1
 
             if hasattr(self.app, "canvas"):
-                self._redraw(self.app.canvas)
+                self.notify_layer_change()
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
 
@@ -424,10 +504,15 @@ class EditorTools:
 
             # Redraw overlays and refresh list
             if hasattr(self.app, "canvas"):
-                self._redraw(self.app.canvas)
+                self.notify_layer_change()
             if hasattr(self.app, "_refresh_region_list"):
                 self.app._refresh_region_list()
 
+    def notify_layer_change(self):
+        """Call this after any layer modification to update live preview."""
+        if hasattr(self.app, "_on_layer_change"):
+            self.app._on_layer_change()
+        self.draw_selection_outline()
 
 
     def circle_region(self):
