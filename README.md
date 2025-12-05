@@ -1,10 +1,12 @@
 # BlankIt
 BlankIt is an open-source local AI-based image redaction program. Input an image and blur the personal information and faces to your liking to make them safe online
 
-## Releases
+# Releases
 Download the v1.0.0 from Releases tab
 
-## Dependencies (if compiling project)
+[![tag](https://img.shields.io/github/v/tag/nengler1/blankit)](https://github.com/nengler1/blankit/releases/tag/v1.0.0)
+
+# Dependencies (if compiling project)
 Create a new Python Virtual Environment. Make sure you are running **Python 3.12**
 ```bash
 python3.12 -m venv venv
